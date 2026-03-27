@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  /* Styles for the print-only area, used by both window.print() and html2pdf.js */
+  #print-area {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+    background: white;
+    color: black;
+    font-family: "Times New Roman", Times, serif;
+    font-size: 14pt;
+    line-height: 1;
+    width: 297mm; /* A4 Landscape width */
+    padding: 0;
+    margin: 0;
+    z-index: -1000;
+  }
+
+  #print-area p {
+    margin-top: 6pt;
+    margin-bottom: 6pt;
+    text-indent: 1cm;
+  }
+
+  #print-area table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12pt;
+  }
+
+  #print-area th, #print-area td {
+    border: 1px solid black;
+    padding: 6pt;
+    font-size: 14pt;
+    font-family: "Times New Roman", Times, serif;
+  }
+
+  #print-area h1, #print-area h2 {
+    text-align: center;
+    margin-bottom: 12pt;
+    font-weight: bold;
+  }
+
+  @media print {
+    @page {
+      size: A4 landscape;
+      margin: 2cm 2cm 2cm 3cm;
+    }
+    
+    body * {
+      visibility: hidden !important;
+    }
+
+    #print-area, #print-area * {
+      visibility: visible !important;
+      display: block !important;
+    }
+
+    #print-area {
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: block !important;
+    }
+
+    #print-area table {
+      display: table !important;
+    }
+
+    #print-area tr {
+      display: table-row !important;
+    }
+
+    #print-area th, #print-area td {
+      display: table-cell !important;
+    }
+  }
+}
