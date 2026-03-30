@@ -46,16 +46,9 @@ import {
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
-const API_KEYS: Record<string, string> = {
-  "tram-chinh": "key-tram-chinh-123",
-  "doan-ket": "key-doan-ket-456",
-  "ha-long": "key-ha-long-789",
-  "dai-xuyen": "key-dai-xuyen-012",
-  "van-yen": "key-van-yen-345"
-};
-
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
+import { supabase } from './lib/supabase';
 
 export default function App() {
   return (
@@ -94,7 +87,6 @@ function MainApp() {
   const [activeTab, setActiveTab] = useState<'entry' | 'report' | 'reminders'>('entry');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isReminderFormOpen, setIsReminderFormOpen] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
 
   // RBAC State - Now from currentUser
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
@@ -132,23 +124,37 @@ function MainApp() {
     ghiChu: '',
   });
 
-  // Fetch records from API
+  // Fetch records from Supabase
   const fetchRecords = async () => {
     try {
-      let url = `/api/data/${currentUser.unitId}`;
-      let headers: Record<string, string> = {
-        "x-api-key": API_KEYS[currentUser.unitId] || ""
-      };
+      let query = supabase.from('activities').select('*');
 
-      if (currentUser.role === 'admin') {
-        url = `/api/central/report`;
-        headers = {}; 
+      if (currentUser.role === 'station') {
+        query = query.eq('unit_id', currentUser.unitId);
       }
 
-      const response = await fetch(url, { headers });
-      if (response.ok) {
-        const data = await response.json();
-        setRecords(data);
+      const { data, error } = await query.order('date', { ascending: false });
+
+      if (error) throw error;
+
+      if (data) {
+        const mappedRecords: HealthCommunicationRecord[] = data.map((item, index) => ({
+          id: item.id,
+          stt: index + 1,
+          thoiGian: item.date,
+          diaDiem: item.location,
+          noiDung: item.content,
+          hinhThuc: item.type,
+          doiTuong: item.target,
+          soNguoi: item.people,
+          phuongTien: item.material,
+          thoiLuong: item.duration,
+          staff: item.staff,
+          signature: item.signature,
+          ghiChu: item.note,
+          unitId: item.unit_id,
+        }));
+        setRecords(mappedRecords);
       }
     } catch (error) {
       console.error("Error fetching records:", error);
@@ -164,18 +170,6 @@ function MainApp() {
       const parsed = JSON.parse(savedReminders);
       if (Array.isArray(parsed)) setReminders(parsed);
     }
-
-    // Auto-sync every 10 minutes for station users
-    let syncInterval: any;
-    if (currentUser.role === 'station') {
-      syncInterval = setInterval(() => {
-        handleSync();
-      }, 10 * 60 * 1000);
-    }
-
-    return () => {
-      if (syncInterval) clearInterval(syncInterval);
-    };
   }, [currentUser]);
 
   // Save data to localStorage
@@ -189,34 +183,6 @@ function MainApp() {
     localStorage.setItem('health_comm_reminders', JSON.stringify(reminders));
   }, [reminders]);
 
-  const handleSync = async () => {
-    if (currentUser.role === 'admin') return;
-    
-    setIsSyncing(true);
-    try {
-      const response = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          unitId: currentUser.unitId,
-          apiKey: API_KEYS[currentUser.unitId],
-          data: records
-        })
-      });
-
-      if (response.ok) {
-        alert("Đồng bộ dữ liệu về trạm chính thành công!");
-      } else {
-        alert("Đồng bộ thất bại. Vui lòng kiểm tra kết nối.");
-      }
-    } catch (error) {
-      console.error("Sync error:", error);
-      alert("Lỗi khi đồng bộ dữ liệu.");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
   const handleAddRecord = async (e: React.FormEvent) => {
     try {
       e.preventDefault();
@@ -226,50 +192,55 @@ function MainApp() {
         return;
       }
 
-      const record: HealthCommunicationRecord = {
-        ...(formData as HealthCommunicationRecord),
-        id: Math.random().toString(36).substr(2, 9),
-        stt: records.length + 1,
-        unitId: currentUser.unitId
-      };
-
-      const response = await fetch(`/api/data/${currentUser.unitId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": API_KEYS[currentUser.unitId] || ""
-        },
-        body: JSON.stringify(record)
+      const { error } = await supabase.from('activities').insert({
+        date: formData.thoiGian,
+        location: formData.diaDiem,
+        content: formData.noiDung,
+        type: formData.hinhThuc,
+        target: formData.doiTuong,
+        people: formData.soNguoi,
+        material: formData.phuongTien,
+        duration: formData.thoiLuong,
+        staff: formData.staff,
+        signature: formData.signature,
+        note: formData.ghiChu,
+        unit_id: currentUser.unitId,
       });
 
-      if (response.ok) {
-        setRecords(prev => [record, ...prev]);
-        setIsFormOpen(false);
-        setFormData({
-          thoiGian: format(new Date(), 'yyyy-MM-dd'),
-          diaDiem: '',
-          noiDung: '',
-          hinhThuc: HINH_THUC_OPTIONS[0],
-          doiTuong: DOI_TUONG_OPTIONS[0],
-          soNguoi: 0,
-          phuongTien: PHUONG_TIEN_OPTIONS[0],
-          thoiLuong: '',
-          staff: '',
-          signature: '',
-          ghiChu: '',
-        });
-      }
+      if (error) throw error;
+
+      await fetchRecords();
+      setIsFormOpen(false);
+      setFormData({
+        thoiGian: format(new Date(), 'yyyy-MM-dd'),
+        diaDiem: '',
+        noiDung: '',
+        hinhThuc: HINH_THUC_OPTIONS[0],
+        doiTuong: DOI_TUONG_OPTIONS[0],
+        soNguoi: 0,
+        phuongTien: PHUONG_TIEN_OPTIONS[0],
+        thoiLuong: '',
+        staff: '',
+        signature: '',
+        ghiChu: '',
+      });
     } catch (error) {
       console.error("Error in handleAddRecord:", error);
+      alert("Lỗi khi thêm dữ liệu.");
     }
   };
 
-  const deleteRecord = (id: string) => {
+  const deleteRecord = async (id: string) => {
+    if (!confirm("Bạn có chắc chắn muốn xóa bản ghi này?")) return;
+    
     try {
-      const updated = records.filter(r => r.id !== id).map((r, index) => ({ ...r, stt: index + 1 }));
-      setRecords(updated);
+      const { error } = await supabase.from('activities').delete().eq('id', id);
+      if (error) throw error;
+      
+      await fetchRecords();
     } catch (error) {
       console.error("Error in deleteRecord:", error);
+      alert("Lỗi khi xóa dữ liệu.");
     }
   };
 
@@ -959,16 +930,6 @@ function MainApp() {
 
           {activeTab === 'entry' && (
             <div className="flex gap-2">
-              {currentUser.role === 'station' && (
-                <button
-                  onClick={handleSync}
-                  disabled={isSyncing}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-emerald-100 disabled:opacity-50"
-                >
-                  <Save size={18} className={isSyncing ? 'animate-spin' : ''} />
-                  {isSyncing ? 'Đang đồng bộ...' : 'Đồng bộ về trạm chính'}
-                </button>
-              )}
               <button 
                 onClick={() => setIsFormOpen(true)}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-indigo-100"
