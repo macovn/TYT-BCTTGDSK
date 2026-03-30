@@ -74,6 +74,37 @@ function MainApp() {
     }
   }, [currentUser, navigate]);
 
+  const isSupabaseConfigured = !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
+        <div className="max-w-md w-full bg-white/10 backdrop-blur-xl border border-white/20 p-8 rounded-3xl shadow-2xl text-center">
+          <div className="w-16 h-16 bg-red-500/20 text-red-400 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <AlertCircle size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-4">Thiếu cấu hình Supabase</h1>
+          <p className="text-blue-100/60 mb-8 text-sm">
+            Vui lòng thiết lập <strong>VITE_SUPABASE_URL</strong> và <strong>VITE_SUPABASE_ANON_KEY</strong> trong phần Settings của Vercel để ứng dụng có thể hoạt động.
+          </p>
+          <div className="bg-black/20 p-4 rounded-xl text-left text-xs font-mono text-blue-200 mb-8 overflow-x-auto">
+            <p>1. Vào Vercel Dashboard</p>
+            <p>2. Settings &rarr; Environment Variables</p>
+            <p>3. Thêm VITE_SUPABASE_URL</p>
+            <p>4. Thêm VITE_SUPABASE_ANON_KEY</p>
+            <p>5. Redeploy ứng dụng</p>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-500 transition-all"
+          >
+            Kiểm tra lại
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) return null;
 
   const logout = () => {
