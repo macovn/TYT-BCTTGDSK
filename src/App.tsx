@@ -7,6 +7,7 @@ import {
   LayoutDashboard, 
   Table as TableIcon,
   Trash2,
+  Pencil,
   Save,
   ChevronRight,
   ChevronLeft,
@@ -31,7 +32,10 @@ import {
   ResponsiveContainer,
   PieChart,
   Pie,
-  Cell
+  Cell,
+  LineChart,
+  Line,
+  Legend
 } from 'recharts';
 import { format, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { 
@@ -44,7 +48,17 @@ import {
   User
 } from './types';
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+const THEME_COLORS = {
+  primary: "#2563EB",
+  secondary: "#10B981",
+  bg: "#F8FAFC",
+  card: "#FFFFFF",
+  text: "#0F172A",
+  subtext: "#64748B",
+  primaryLight: "#60A5FA"
+};
+
+const COLORS = ['#2563EB', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316'];
 
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
@@ -118,6 +132,9 @@ function MainApp() {
   const [activeTab, setActiveTab] = useState<'entry' | 'report' | 'reminders'>('entry');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isReminderFormOpen, setIsReminderFormOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<HealthCommunicationRecord | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   // RBAC State - Now from currentUser
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
@@ -223,7 +240,7 @@ function MainApp() {
         return;
       }
 
-      const { error } = await supabase.from('activities').insert({
+      const payload = {
         date: formData.thoiGian,
         location: formData.diaDiem,
         content: formData.noiDung,
@@ -236,12 +253,19 @@ function MainApp() {
         signature: formData.signature,
         note: formData.ghiChu,
         unit_id: currentUser.unitId,
-      });
+      };
 
-      if (error) throw error;
+      if (editingRecord) {
+        const { error } = await supabase.from('activities').update(payload).eq('id', editingRecord.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('activities').insert(payload);
+        if (error) throw error;
+      }
 
       await fetchRecords();
       setIsFormOpen(false);
+      setEditingRecord(null);
       setFormData({
         thoiGian: format(new Date(), 'yyyy-MM-dd'),
         diaDiem: '',
@@ -257,8 +281,26 @@ function MainApp() {
       });
     } catch (error) {
       console.error("Error in handleAddRecord:", error);
-      alert("Lỗi khi thêm dữ liệu.");
+      alert("Lỗi khi lưu dữ liệu.");
     }
+  };
+
+  const openEditForm = (record: HealthCommunicationRecord) => {
+    setEditingRecord(record);
+    setFormData({
+      thoiGian: record.thoiGian,
+      diaDiem: record.diaDiem,
+      noiDung: record.noiDung,
+      hinhThuc: record.hinhThuc,
+      doiTuong: record.doiTuong,
+      soNguoi: record.soNguoi,
+      phuongTien: record.phuongTien,
+      thoiLuong: record.thoiLuong,
+      staff: record.staff,
+      signature: record.signature,
+      ghiChu: record.ghiChu,
+    });
+    setIsFormOpen(true);
   };
 
   const deleteRecord = async (id: string) => {
@@ -303,8 +345,25 @@ function MainApp() {
     }
   };
 
-  // Report calculations
-  const filteredRecords = useMemo(() => {
+  // Records for the Entry list (filtered by unit only)
+  const entryRecords = useMemo(() => {
+    let result = records;
+    if (selectedUnit !== 'all') {
+      result = result.filter(r => r.unitId === selectedUnit);
+    }
+    return result;
+  }, [records, selectedUnit]);
+
+  // Pagination for Entry list
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return entryRecords.slice(startIndex, startIndex + itemsPerPage);
+  }, [entryRecords, currentPage]);
+
+  const totalPages = Math.ceil(entryRecords.length / itemsPerPage);
+
+  // Records for Report calculations (filtered by unit and date)
+  const reportRecords = useMemo(() => {
     try {
       return records.filter(record => {
         // RBAC Filter
@@ -364,20 +423,20 @@ function MainApp() {
 
   const statsByHinhThuc = useMemo(() => {
     const counts: Record<string, number> = {};
-    filteredRecords.forEach(r => {
+    reportRecords.forEach(r => {
       counts[r.hinhThuc] = (counts[r.hinhThuc] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [filteredRecords]);
+  }, [reportRecords]);
 
   const reportSummary = useMemo(() => {
-    const totalSessions = filteredRecords.length;
-    const totalPeople = filteredRecords.reduce((sum, item) => sum + Number(item.soNguoi || 0), 0);
+    const totalSessions = reportRecords.length;
+    const totalPeople = reportRecords.reduce((sum, item) => sum + Number(item.soNguoi || 0), 0);
     
     const byType: Record<string, { sessions: number; people: number }> = {};
     const byUnit: Record<string, { sessions: number; people: number }> = {};
     
-    filteredRecords.forEach(item => {
+    reportRecords.forEach(item => {
       const type = item.hinhThuc || "Khác";
       if (!byType[type]) {
         byType[type] = { sessions: 0, people: 0 };
@@ -394,347 +453,111 @@ function MainApp() {
     });
     
     return { totalSessions, totalPeople, byType, byUnit };
-  }, [filteredRecords]);
+  }, [reportRecords]);
 
   const statsByDoiTuong = useMemo(() => {
     const counts: Record<string, number> = {};
-    filteredRecords.forEach(r => {
+    reportRecords.forEach(r => {
       counts[r.doiTuong] = (counts[r.doiTuong] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [filteredRecords]);
+  }, [reportRecords]);
 
   const statsByUnit = useMemo(() => {
     const counts: Record<string, number> = {};
-    filteredRecords.forEach(r => {
+    reportRecords.forEach(r => {
       const unitName = UNITS.find(u => u.id === r.unitId)?.name || "Khác";
       counts[unitName] = (counts[unitName] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [filteredRecords]);
+  }, [reportRecords]);
+
+  const statsByDate = useMemo(() => {
+    const counts: Record<string, number> = {};
+    reportRecords.forEach(r => {
+      const date = r.thoiGian;
+      counts[date] = (counts[date] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [reportRecords]);
 
   const handlePrint = () => {
     try {
-      if (typeof window === "undefined") return;
-      const content = document.getElementById('print-area');
-
-      if (!content) {
-        alert("Không có dữ liệu để in");
+      const printContent = document.getElementById('print-area');
+      if (!printContent) {
+        window.print(); // Fallback to direct print
         return;
       }
 
-      const printWindow = window.open("", "", "width=1200,height=800");
+      // Create a new window for printing
+      const printWindow = window.open('', '_blank', 'width=1000,height=800');
       if (!printWindow) {
-        alert("Vui lòng cho phép trình duyệt mở cửa sổ mới để in");
+        // Fallback to direct print if popup is blocked
+        window.focus();
+        window.print();
         return;
       }
+
+      // Collect all styles to pass to the print window
+      const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+        .map(s => s.outerHTML)
+        .join('');
 
       printWindow.document.write(`
         <html>
           <head>
-            <title>In sổ GDSK</title>
+            <title>In Sổ Theo Dõi - GDSK</title>
+            ${styles}
             <style>
-              @page {
-                size: A4 landscape;
-                margin: 2cm 2cm 2cm 3cm;
+              @media print {
+                @page { size: A4 landscape; margin: 1cm; }
               }
-              body {
-                font-family: "Times New Roman", Times, serif;
-                font-size: 14pt;
-                line-height: 1.3;
-                margin: 0;
-                padding: 0;
+              body { 
+                padding: 20px; 
+                font-family: "Times New Roman", Times, serif !important;
+                background: white !important;
+                color: black !important;
               }
-              .header {
-                text-align: center;
-                margin-bottom: 30px;
+              .print-only { display: block !important; }
+              .no-print { display: none !important; }
+              table { 
+                width: 100% !important; 
+                border-collapse: collapse !important; 
+                margin-top: 20px !important; 
               }
-              .header h1 {
-                font-size: 18pt;
-                margin: 0;
-                text-transform: uppercase;
+              th, td { 
+                border: 1px solid black !important; 
+                padding: 6px !important; 
+                text-align: center !important; 
+                vertical-align: middle !important;
+                font-size: 13px !important;
               }
-              .header h2 {
-                font-size: 14pt;
-                margin: 5px 0;
-              }
-              .header p {
-                font-style: italic;
-                margin: 5px 0;
-              }
-              .section-title { 
-                font-size: 14pt; 
-                font-weight: bold; 
-                margin-top: 20px; 
-                margin-bottom: 10px; 
-              }
-              table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 20px;
-              }
-              th, td {
-                border: 1px solid black;
-                padding: 6px;
-                text-align: left;
-                font-size: 12pt;
-              }
-              th {
-                background-color: #f2f2f2;
-                text-align: center;
-                font-weight: bold;
-              }
-              .footer {
-                margin-top: 40px;
-                display: flex;
-                justify-content: space-between;
-              }
-              .footer-col {
-                text-align: center;
-                width: 40%;
-              }
-              .footer-col p.title {
-                font-weight: bold;
-                margin-bottom: 60px;
-              }
+              th { background-color: #f2f2f2 !important; font-weight: bold !important; }
+              h1, h2 { text-align: center !important; margin-bottom: 10px !important; }
+              .print-header { margin-bottom: 30px; }
             </style>
           </head>
           <body>
-            <div class="header">
-              <h1>Sổ theo dõi truyền thông GDSK</h1>
-              <h2>Trạm Y tế Cái Bầu</h2>
-              <p>Thời gian: ${reportTitle}</p>
+            <div class="print-only">
+              ${printContent.innerHTML}
             </div>
-
-            <div class="section-title">I. TỔNG HỢP CHUNG</div>
-            <p>1. Tổng số buổi truyền thông: ${reportSummary.totalSessions}</p>
-            <p>2. Tổng số lượt người tham gia: ${reportSummary.totalPeople}</p>
-
-            <div class="section-title">II. PHÂN LOẠI THEO HÌNH THỨC</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Hình thức</th>
-                  <th>Số buổi</th>
-                  <th>Số người</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${Object.entries(reportSummary.byType).map(([type, val]) => `
-                  <tr>
-                    <td>${type}</td>
-                    <td style="text-align: center">${val.sessions}</td>
-                    <td style="text-align: center">${val.people}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-
-            ${currentUser.role === 'admin' ? `
-              <div class="section-title">III. PHÂN LOẠI THEO ĐƠN VỊ</div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Đơn vị</th>
-                    <th>Số buổi</th>
-                    <th>Số người</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${Object.entries(reportSummary.byUnit).map(([unit, val]) => `
-                    <tr>
-                      <td>${unit}</td>
-                      <td style="text-align: center">${val.sessions}</td>
-                      <td style="text-align: center">${val.people}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            ` : ''}
-
-            <div class="section-title">${currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIẾT CÁC HOẠT ĐỘNG</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>STT</th>
-                  <th>Thời gian</th>
-                  <th>Địa điểm</th>
-                  <th>Nội dung</th>
-                  <th>Hình thức</th>
-                  <th>Đơn vị</th>
-                  <th>Đối tượng</th>
-                  <th>Số người</th>
-                  <th>Phương tiện</th>
-                  <th>Thời lượng</th>
-                  <th>Người thực hiện</th>
-                  <th>Ký xác nhận</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${filteredRecords.map(row => `
-                  <tr>
-                    <td style="text-align: center">${row.stt}</td>
-                    <td>${safeFormat(row.thoiGian, 'dd/MM/yyyy')}</td>
-                    <td>${row.diaDiem}</td>
-                    <td>${row.noiDung}</td>
-                    <td>${row.hinhThuc}</td>
-                    <td>${UNITS.find(u => u.id === row.unitId)?.name || 'N/A'}</td>
-                    <td>${row.doiTuong}</td>
-                    <td style="text-align: center">${row.soNguoi}</td>
-                    <td>${row.phuongTien}</td>
-                    <td>${row.thoiLuong}</td>
-                    <td>${row.staff}</td>
-                    <td>${row.signature || ''}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-
-            <div class="footer">
-              <div class="footer-col">
-                <p class="title">Người lập</p>
-                <p style="font-style: italic">(Ký, ghi rõ họ tên)</p>
-              </div>
-              <div class="footer-col">
-                <p class="title">Trưởng trạm</p>
-                <p style="font-style: italic">(Ký tên, đóng dấu)</p>
-              </div>
-            </div>
+            <script>
+              window.onload = () => {
+                setTimeout(() => {
+                  window.print();
+                  window.close();
+                }, 500);
+              };
+            </script>
           </body>
         </html>
       `);
-
       printWindow.document.close();
-      printWindow.focus();
-
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
     } catch (error) {
-      console.error("Error in handlePrint:", error);
-    }
-  };
-
-  const handleExportPDF = async () => {
-    try {
-      if (typeof window === "undefined") return;
-      if (filteredRecords.length === 0) {
-        alert("Không có hoạt động trong thời gian này");
-        return;
-      }
-
-      // Lazy load libraries
-      const [jsPDFModule, autoTableModule] = await Promise.all([
-        import('jspdf'),
-        import('jspdf-autotable')
-      ]);
-      const { jsPDF } = jsPDFModule;
-      
-      const doc = new jsPDF({
-        orientation: "landscape",
-        unit: "mm",
-        format: "a4"
-      });
-
-      // Add title
-      doc.setFontSize(18);
-      doc.text("BAO CAO TRUYEN THONG GDSK", doc.internal.pageSize.getWidth() / 2, 20, { align: "center" });
-      
-      doc.setFontSize(12);
-      doc.text(`Thoi gian: ${reportTitle}`, doc.internal.pageSize.getWidth() / 2, 28, { align: "center" });
-
-      // I. Summary Section
-      doc.setFontSize(14);
-      doc.text("I. TONG HOP CHUNG", 14, 40);
-      doc.setFontSize(11);
-      doc.text(`1. Tong so buoi truyen thong: ${reportSummary.totalSessions}`, 14, 48);
-      doc.text(`2. Tong so luot nguoi tham gia: ${reportSummary.totalPeople}`, 14, 54);
-
-      // II. Classification Table
-      doc.setFontSize(14);
-      doc.text("II. PHAN LOAI THEO HINH THUC", 14, 65);
-      
-      const summaryColumn = ["Hinh thuc", "So buoi", "So nguoi"];
-      const summaryRows = Object.entries(reportSummary.byType).map(([type, val]) => [
-        type, val.sessions, val.people
-      ]);
-
-      (doc as any).autoTable({
-        head: [summaryColumn],
-        body: summaryRows,
-        startY: 70,
-        theme: 'grid',
-        styles: { fontSize: 10, font: 'helvetica' },
-        headStyles: { fillColor: [100, 100, 100] }
-      });
-
-      let finalY = (doc as any).lastAutoTable.finalY || 70;
-
-      // Unit Breakdown (Admin Only)
-      if (currentUser.role === 'admin') {
-        doc.setFontSize(14);
-        doc.text("III. PHAN LOAI THEO DON VI", 14, finalY + 15);
-        
-        const unitColumn = ["Don vi", "So buoi", "So nguoi"];
-        const unitRows = Object.entries(reportSummary.byUnit).map(([unit, val]) => [
-          unit, val.sessions, val.people
-        ]);
-
-        (doc as any).autoTable({
-          head: [unitColumn],
-          body: unitRows,
-          startY: finalY + 20,
-          theme: 'grid',
-          styles: { fontSize: 10, font: 'helvetica' },
-          headStyles: { fillColor: [100, 100, 100] }
-        });
-        finalY = (doc as any).lastAutoTable.finalY || finalY + 20;
-      }
-
-      // III. Detailed Table
-      doc.setFontSize(14);
-      doc.text(`${currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIET CAC HOAT DONG`, 14, finalY + 15);
-
-      const tableColumn = ["STT", "Thoi gian", "Dia diem", "Noi dung", "Hinh thuc", "Don vi", "Doi tuong", "So nguoi", "Phuong tien", "Thoi luong", "Nguoi thuc hien", "Ky xac nhan", "Ghi chu"];
-      const tableRows = filteredRecords.map(row => [
-        row.stt,
-        safeFormat(row.thoiGian, 'dd/MM/yyyy'),
-        row.diaDiem,
-        row.noiDung,
-        row.hinhThuc,
-        UNITS.find(u => u.id === row.unitId)?.name || 'N/A',
-        row.doiTuong,
-        row.soNguoi,
-        row.phuongTien,
-        row.thoiLuong,
-        row.staff,
-        row.signature || "",
-        row.ghiChu || ""
-      ]);
-
-      (doc as any).autoTable({
-        head: [tableColumn],
-        body: tableRows,
-        startY: finalY + 20,
-        theme: 'grid',
-        styles: {
-          fontSize: 9,
-          cellPadding: 2,
-          valign: 'middle',
-          font: 'helvetica'
-        },
-        headStyles: {
-          fillColor: [240, 240, 240],
-          textColor: [0, 0, 0],
-          fontStyle: 'bold',
-        }
-      });
-
-      doc.save(`Bao_cao_truyen_thong_${reportTitle.replace(/\//g, '-')}.pdf`);
-    } catch (error) {
-      console.error("Error in handleExportPDF:", error);
-      alert("Có lỗi xảy ra khi xuất PDF. Vui lòng thử lại.");
+      console.error("Print error:", error);
+      window.print(); // Final fallback
     }
   };
 
@@ -749,30 +572,86 @@ function MainApp() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex font-sans text-slate-800">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col">
-        <div className="p-6 border-b border-slate-100">
-          <div className="flex items-center gap-3 text-indigo-600 mb-1">
-            <Megaphone size={24} strokeWidth={2.5} />
-            <h1 className="font-bold text-lg tracking-tight">GDSK A11</h1>
+    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
+      {/* Print-only component */}
+      <div className="print-only">
+        <div className="print-header">
+          <h1>SỔ THEO DÕI TRUYỀN THÔNG GDSK</h1>
+          <h2 style={{ textTransform: 'none' }}>Thời gian: {reportTitle}</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>STT</th>
+              <th>Thời gian</th>
+              <th>Địa điểm</th>
+              <th>Nội dung</th>
+              <th>Hình thức</th>
+              <th>Đối tượng</th>
+              <th>Số người</th>
+              <th>Thời lượng</th>
+              <th>Phương tiện</th>
+              <th>Người thực hiện</th>
+              <th>Ký xác nhận</th>
+              <th>Ghi chú</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reportRecords.map((item, index) => (
+              <tr key={item.id || index}>
+                <td>{index + 1}</td>
+                <td>{item.thoiGian}</td>
+                <td>{item.diaDiem}</td>
+                <td>{item.noiDung}</td>
+                <td>{item.hinhThuc}</td>
+                <td>{item.doiTuong}</td>
+                <td>{item.soNguoi}</td>
+                <td>{item.thoiLuong}</td>
+                <td>{item.phuongTien}</td>
+                <td>{item.staff}</td>
+                <td>{item.signature}</td>
+                <td>{item.ghiChu}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-12 flex justify-between px-16">
+          <div className="text-center">
+            <p className="font-bold">Người lập sổ</p>
+            <p className="mt-20">(Ký, ghi rõ họ tên)</p>
           </div>
-          <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">
+          <div className="text-center">
+            <p className="italic">Ngày ...... tháng ...... năm 20...</p>
+            <p className="font-bold mt-2">Trưởng đơn vị</p>
+            <p className="mt-20">(Ký tên, đóng dấu)</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="no-print flex w-full">
+        {/* Sidebar */}
+        <aside className="w-64 bg-slate-900 flex flex-col shadow-2xl z-20">
+        <div className="p-6 border-b border-slate-800">
+          <div className="flex items-center gap-3 text-blue-400 mb-1">
+            <Megaphone size={24} strokeWidth={2.5} />
+            <h1 className="font-black text-xl tracking-tighter text-white">GDSK A11</h1>
+          </div>
+          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em]">
             {UNITS.find(u => u.id === currentUser.unitId)?.name || 'Trạm Y tế'}
           </p>
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold text-xs">
+          <div className="mt-6 pt-6 border-t border-slate-800">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 bg-blue-500/20 border border-blue-500/30 rounded-xl flex items-center justify-center text-blue-400 font-black text-sm shadow-inner">
                 {currentUser.username?.[0]?.toUpperCase() || 'U'}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-700 truncate">{currentUser.username}</p>
-                <p className="text-[10px] text-slate-400 uppercase font-bold">{currentUser.role === 'admin' ? 'Quản trị viên' : 'Nhân viên trạm'}</p>
+                <p className="text-sm font-bold text-slate-200 truncate">{currentUser.username}</p>
+                <p className="text-[10px] text-slate-500 uppercase font-black tracking-wider">{currentUser.role === 'admin' ? 'Quản trị viên' : 'Nhân viên trạm'}</p>
               </div>
             </div>
             <button 
               onClick={logout}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all duration-200"
             >
               <LogIn size={14} className="rotate-180" />
               Đăng xuất
@@ -780,94 +659,97 @@ function MainApp() {
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-2">
           <button 
             onClick={() => setActiveTab('entry')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'entry' ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group ${activeTab === 'entry' ? 'bg-blue-600 text-white font-bold shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
           >
-            <TableIcon size={20} />
+            <TableIcon size={20} className={activeTab === 'entry' ? 'text-white' : 'text-slate-500 group-hover:text-blue-400'} />
             Sổ Theo Dõi
           </button>
           <button 
             onClick={() => setActiveTab('report')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'report' ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group ${activeTab === 'report' ? 'bg-blue-600 text-white font-bold shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
           >
-            <LayoutDashboard size={20} />
+            <LayoutDashboard size={20} className={activeTab === 'report' ? 'text-white' : 'text-slate-500 group-hover:text-blue-400'} />
             Báo Cáo Tháng
           </button>
           <button 
             onClick={() => setActiveTab('reminders')}
-            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'reminders' ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-300 group ${activeTab === 'reminders' ? 'bg-blue-600 text-white font-bold shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
           >
             <div className="flex items-center gap-3">
-              <Bell size={20} />
+              <Bell size={20} className={activeTab === 'reminders' ? 'text-white' : 'text-slate-500 group-hover:text-blue-400'} />
               Nhắc Nhở
             </div>
             {reminders.filter(r => !r.hoanThanh).length > 0 && (
-              <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${activeTab === 'reminders' ? 'bg-white text-blue-600' : 'bg-red-500 text-white'}`}>
                 {reminders.filter(r => !r.hoanThanh).length}
               </span>
             )}
           </button>
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
-          <div className="bg-indigo-600 rounded-2xl p-4 text-white shadow-lg shadow-indigo-200">
-            <p className="text-xs opacity-80 mb-1">Tổng số buổi</p>
-            <p className="text-2xl font-bold">{records.length}</p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="p-4 border-t border-slate-800">
+          <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-5 text-white shadow-xl shadow-blue-900/20 relative overflow-hidden group">
+            <div className="absolute -right-4 -bottom-4 opacity-10 group-hover:scale-110 transition-transform duration-500">
+              <Megaphone size={80} />
+            </div>
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">Tổng số buổi</p>
+            <p className="text-3xl font-black tracking-tighter">{records.length}</p>
+            <div className="mt-4 grid grid-cols-2 gap-2 relative z-10">
               <button 
                 onClick={async () => {
                   try {
                     const { exportToExcel } = await import('./lib/export');
-                    exportToExcel(filteredRecords, reportTitle, currentUser.role === 'admin');
+                    await exportToExcel(reportRecords, reportTitle, currentUser.role === 'admin');
                   } catch (error) {
                     console.error("Error in exportToExcel button:", error);
                   }
                 }}
-                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+                className="bg-white/10 hover:bg-white/20 backdrop-blur-md text-[10px] font-black py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10"
                 title="Xuất Excel"
               >
-                <FileSpreadsheet size={16} />
-                Excel
+                <FileSpreadsheet size={12} />
+                EXCEL
               </button>
               <button 
                 onClick={async () => {
                   try {
                     const { exportToWord } = await import('./lib/export');
-                    exportToWord(filteredRecords, reportTitle, currentUser.role === 'admin');
+                    await exportToWord(reportRecords, reportTitle, currentUser.role === 'admin');
                   } catch (error) {
                     console.error("Error in exportToWord button:", error);
                   }
                 }}
-                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+                className="bg-white/10 hover:bg-white/20 backdrop-blur-md text-[10px] font-black py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10"
                 title="Xuất Word"
               >
-                <FileText size={16} />
-                Word
+                <FileText size={12} />
+                WORD
               </button>
               <button 
                 onClick={async () => {
                   try {
                     const { exportToPDF } = await import('./lib/export');
-                    exportToPDF(filteredRecords, reportTitle, currentUser.role === 'admin');
+                    await exportToPDF(reportRecords, reportTitle, currentUser.role === 'admin');
                   } catch (error) {
                     console.error("Error in exportToPDF button:", error);
                   }
                 }}
-                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+                className="bg-white/10 hover:bg-white/20 backdrop-blur-md text-[10px] font-black py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10"
                 title="Xuất PDF"
               >
-                <FileText size={16} className="text-red-300" />
+                <FileText size={12} />
                 PDF
               </button>
               <button 
                 onClick={handlePrint}
-                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+                className="bg-white/10 hover:bg-white/20 backdrop-blur-md text-[10px] font-black py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10"
                 title="In Sổ"
               >
-                <Printer size={16} />
-                In Sổ
+                <Printer size={12} />
+                IN SỔ
               </button>
             </div>
           </div>
@@ -875,7 +757,7 @@ function MainApp() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden bg-slate-50">
         {/* Header */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0">
           <div className="flex items-center gap-4">
@@ -883,7 +765,9 @@ function MainApp() {
               {activeTab === 'entry' ? 'Danh Sách Hoạt Động Truyền Thông' : 
                activeTab === 'report' ? 'Thống Kê Báo Cáo' : 'Danh Sách Nhắc Nhở'}
             </h2>
+          </div>
 
+          <div className="flex items-center gap-3">
             {/* Unit Selector */}
             <div className="flex items-center gap-2 bg-slate-100 rounded-xl p-1.5">
               <span className="text-[10px] font-bold text-slate-400 uppercase px-2">Đơn vị:</span>
@@ -929,7 +813,7 @@ function MainApp() {
                   <select 
                     value={reportValue}
                     onChange={(e) => setReportValue(parseInt(e.target.value))}
-                    className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                    className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                   >
                     {reportType === 'month' && Array.from({ length: 12 }, (_, i) => (
                       <option key={i + 1} value={i + 1}>Tháng {i + 1}</option>
@@ -949,7 +833,7 @@ function MainApp() {
                 <select 
                   value={reportYear}
                   onChange={(e) => setReportYear(parseInt(e.target.value))}
-                  className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                  className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                 >
                   {[2024, 2025, 2026, 2027].map(y => (
                     <option key={y} value={y}>Năm {y}</option>
@@ -957,82 +841,94 @@ function MainApp() {
                 </select>
               </div>
             )}
-          </div>
 
-          {activeTab === 'entry' && (
-            <div className="flex gap-2">
+            {activeTab === 'entry' && (
               <button 
                 onClick={() => setIsFormOpen(true)}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-indigo-100"
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-blue-100"
               >
                 <Plus size={18} />
                 Thêm Hoạt Động
               </button>
-            </div>
-          )}
+            )}
 
-          {activeTab === 'reminders' && (
-            <button 
-              onClick={() => setIsReminderFormOpen(true)}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-indigo-100"
-            >
-              <Plus size={18} />
-              Thêm Nhắc Nhở
-            </button>
-          )}
+            {activeTab === 'reminders' && (
+              <button 
+                onClick={() => setIsReminderFormOpen(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-blue-100"
+              >
+                <Plus size={18} />
+                Thêm Nhắc Nhở
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Content Area */}
         <div className="flex-1 overflow-auto p-8">
           {activeTab === 'entry' && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="bg-white rounded-[12px] border border-slate-200 shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center w-12">STT</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Thời gian</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Địa điểm</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Nội dung</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hình thức</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đơn vị</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đối tượng</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Phương tiện</th>
-                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Thao tác</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center w-12">STT</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Thời gian</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Địa điểm</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Nội dung</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Hình thức</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Đơn vị</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Đối tượng</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Số người</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Phương tiện</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {records.map((record) => (
-                      <tr key={record.id} className="hover:bg-slate-50/50 transition-colors group">
+                    {paginatedRecords.map((record) => (
+                      <tr key={record.id} className="hover:bg-slate-50 transition-all duration-200 group cursor-default">
                         <td className="px-4 py-4 text-sm font-medium text-slate-400 text-center">{record.stt}</td>
-                        <td className="px-4 py-4 text-sm font-semibold text-slate-700">{safeFormat(record.thoiGian, 'dd/MM/yyyy')}</td>
-                        <td className="px-4 py-4 text-sm text-slate-600">{record.diaDiem}</td>
-                        <td className="px-4 py-4 text-sm font-medium text-slate-900">{record.noiDung}</td>
+                        <td className="px-4 py-4 text-sm font-bold text-slate-700">{safeFormat(record.thoiGian, 'dd/MM/yyyy')}</td>
+                        <td className="px-4 py-4 text-sm text-slate-600 max-w-[150px] truncate" title={record.diaDiem}>{record.diaDiem}</td>
+                        <td className="px-4 py-4 text-sm font-medium text-slate-900 max-w-[250px] truncate" title={record.noiDung}>{record.noiDung}</td>
                         <td className="px-4 py-4">
-                          <span className="px-2 py-1 bg-indigo-50 text-indigo-600 text-[11px] font-bold rounded-md uppercase tracking-wide">
+                          <span className={`px-2 py-1 text-[10px] font-black rounded-md uppercase tracking-wider ${
+                            record.hinhThuc === 'Tập huấn' ? 'bg-blue-100 text-blue-700' : 
+                            record.hinhThuc === 'Phát thanh loa xã' ? 'bg-emerald-100 text-emerald-700' :
+                            'bg-slate-100 text-slate-600'
+                          }`}>
                             {record.hinhThuc}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-xs font-medium text-slate-500">
+                        <td className="px-4 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">
                           {UNITS.find(u => u.id === record.unitId)?.name || 'N/A'}
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-600">{record.doiTuong}</td>
-                        <td className="px-4 py-4 text-sm font-bold text-slate-900 text-center">{record.soNguoi}</td>
+                        <td className="px-4 py-4 text-sm font-black text-slate-900 text-center">{record.soNguoi}</td>
                         <td className="px-4 py-4 text-sm text-slate-500 italic">{record.phuongTien}</td>
                         <td className="px-4 py-4 text-center">
-                          <button 
-                            onClick={() => deleteRecord(record.id)}
-                            className="p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => openEditForm(record)}
+                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                              title="Sửa"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button 
+                              onClick={() => deleteRecord(record.id)}
+                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                              title="Xóa"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
-                    {records.length === 0 && (
+                    {paginatedRecords.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="px-4 py-20 text-center text-slate-400 italic">
+                        <td colSpan={10} className="px-4 py-20 text-center text-slate-400 italic">
                           Chưa có dữ liệu. Hãy nhấn "Thêm Hoạt Động" để bắt đầu.
                         </td>
                       </tr>
@@ -1040,6 +936,31 @@ function MainApp() {
                   </tbody>
                 </table>
               </div>
+              
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                    Trang {currentPage} / {totalPages}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage(prev => prev - 1)}
+                      className="p-2 rounded-lg hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-all border border-transparent hover:border-slate-200"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <button 
+                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage(prev => prev + 1)}
+                      className="p-2 rounded-lg hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-all border border-transparent hover:border-slate-200"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1051,7 +972,7 @@ function MainApp() {
                 <p className="text-slate-500 font-medium text-lg">Thời gian: {reportTitle}</p>
               </div>
 
-              {filteredRecords.length === 0 ? (
+              {reportRecords.length === 0 ? (
                 <div className="bg-white py-20 rounded-3xl border border-dashed border-slate-200 text-center space-y-4">
                   <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto text-slate-300">
                     <AlertCircle size={40} />
@@ -1063,141 +984,141 @@ function MainApp() {
                 </div>
               ) : (
                 <>
-                  {/* Stats Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-                      <CalendarIcon size={24} />
+              {/* KPI Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-gradient-to-br from-white to-blue-50/30 p-8 rounded-3xl border border-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden group hover:shadow-[0_20px_50px_rgba(37,99,235,0.1)] transition-all duration-500">
+                  <div className="absolute -right-6 -top-6 w-32 h-32 bg-blue-500/5 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                  <div className="flex items-center gap-5 mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-blue-600 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 group-hover:rotate-6 transition-transform duration-300">
+                      <LayoutDashboard size={28} />
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Tổng số buổi</p>
-                      <p className="text-2xl font-black text-slate-900">{filteredRecords.length}</p>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] mb-1">Tổng số buổi</p>
+                      <p className="text-4xl font-black text-slate-900 tracking-tighter">{reportSummary.totalSessions}</p>
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500">{reportTitle}</p>
+                  <div className="flex items-center gap-2 text-xs font-bold text-blue-600 relative z-10">
+                    <span className="px-2 py-0.5 bg-blue-100 rounded-full">Hoạt động</span>
+                    <span className="text-slate-400 font-medium">đã thực hiện</span>
+                  </div>
                 </div>
 
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-                      <Users size={24} />
+                <div className="bg-gradient-to-br from-white to-emerald-50/30 p-8 rounded-3xl border border-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden group hover:shadow-[0_20px_50px_rgba(16,185,129,0.1)] transition-all duration-500">
+                  <div className="absolute -right-6 -top-6 w-32 h-32 bg-emerald-500/5 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                  <div className="flex items-center gap-5 mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-emerald-600 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-200 group-hover:rotate-6 transition-transform duration-300">
+                      <Users size={28} />
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Tổng số người</p>
-                      <p className="text-2xl font-black text-slate-900">
-                        {reportSummary.totalPeople}
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] mb-1">Tổng số người</p>
+                      <p className="text-4xl font-black text-slate-900 tracking-tighter">{reportSummary.totalPeople.toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 relative z-10">
+                    <span className="px-2 py-0.5 bg-emerald-100 rounded-full">Lượt tiếp cận</span>
+                    <span className="text-slate-400 font-medium">trong kỳ</span>
+                  </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-white to-amber-50/30 p-8 rounded-3xl border border-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden group hover:shadow-[0_20px_50px_rgba(245,158,11,0.1)] transition-all duration-500">
+                  <div className="absolute -right-6 -top-6 w-32 h-32 bg-amber-500/5 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                  <div className="flex items-center gap-5 mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-amber-500 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-amber-200 group-hover:rotate-6 transition-transform duration-300">
+                      <CheckCircle2 size={28} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em] mb-1">Trung bình</p>
+                      <p className="text-4xl font-black text-slate-900 tracking-tighter">
+                        {reportSummary.totalSessions > 0 
+                          ? (reportSummary.totalPeople / reportSummary.totalSessions).toFixed(1) 
+                          : 0}
                       </p>
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500">Người tham gia trực tiếp</p>
-                </div>
-
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                      <Megaphone size={24} />
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Hình thức phổ biến</p>
-                      <p className="text-lg font-bold text-slate-900 truncate">
-                        {statsByHinhThuc.length > 0 ? [...statsByHinhThuc].sort((a,b) => b.value - a.value)[0].name : 'N/A'}
-                      </p>
-                    </div>
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-600 relative z-10">
+                    <span className="px-2 py-0.5 bg-amber-100 rounded-full">Hiệu suất</span>
+                    <span className="text-slate-400 font-medium">người/buổi</span>
                   </div>
-                  <p className="text-xs text-slate-500">Được thực hiện nhiều nhất</p>
                 </div>
               </div>
 
-              {/* Summary Table */}
-              <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
-                  <span className="w-1 h-6 bg-slate-600 rounded-full"></span>
-                  Bảng Tổng Hợp Phân Loại
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200">
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hình thức truyền thông</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số buổi</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người tham gia</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {Object.entries(reportSummary.byType).map(([type, val]) => (
-                        <tr key={type} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4 text-sm font-medium text-slate-700">{type}</td>
-                          <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
-                          <td className="px-6 py-4 text-sm font-bold text-indigo-600 text-center">{val.people}</td>
-                        </tr>
-                      ))}
-                      <tr className="bg-slate-50/50 font-bold">
-                        <td className="px-6 py-4 text-sm text-slate-900 uppercase">Tổng cộng</td>
-                        <td className="px-6 py-4 text-sm text-slate-900 text-center">{reportSummary.totalSessions}</td>
-                        <td className="px-6 py-4 text-sm text-indigo-700 text-center">{reportSummary.totalPeople}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Unit Summary Table (Admin Only) */}
-              {currentUser.role === 'admin' && (
-                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8">
-                  <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
-                    <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
-                    Bảng Tổng Hợp Theo Đơn Vị
-                  </h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200">
-                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đơn vị</th>
-                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số buổi</th>
-                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người tham gia</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {Object.entries(reportSummary.byUnit).map(([unit, val]) => (
-                          <tr key={unit} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4 text-sm font-medium text-slate-700">{unit}</td>
-                            <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
-                            <td className="px-6 py-4 text-sm font-bold text-indigo-600 text-center">{val.people}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Charts */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Charts Row 1: Trend and Type */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 my-8">
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                  <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
-                    <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
-                    Phân Bổ Theo Hình Thức
+                  <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                    <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                    <span className="border-b-2 border-blue-500/20 pb-1">Xu Hướng Theo Thời Gian</span>
                   </h3>
                   <div className="h-80">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={statsByHinhThuc}>
+                      <LineChart data={statsByDate}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748B'}} />
-                        <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748B'}} />
+                        <XAxis 
+                          dataKey="name" 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{fontSize: 10, fill: THEME_COLORS.subtext}}
+                          tickFormatter={(val) => val.split('-').slice(1).reverse().join('/')}
+                        />
+                        <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: THEME_COLORS.subtext}} />
                         <Tooltip 
                           contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
                         />
-                        <Bar dataKey="value" fill="#6366F1" radius={[4, 4, 0, 0]} barSize={40} />
-                      </BarChart>
+                        <Line type="monotone" dataKey="value" stroke={THEME_COLORS.primary} strokeWidth={3} dot={{r: 4, fill: THEME_COLORS.primary, strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 6}} />
+                      </LineChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
 
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                  <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
-                    <span className="w-1 h-6 bg-emerald-600 rounded-full"></span>
-                    Cơ Cấu Đối Tượng
+                  <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                    <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                    <span className="border-b-2 border-blue-500/20 pb-1">Phân Bổ Theo Hình Thức</span>
+                  </h3>
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={statsByHinhThuc}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: THEME_COLORS.subtext}} />
+                        <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: THEME_COLORS.subtext}} />
+                        <Tooltip 
+                          contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                        />
+                        <Bar dataKey="value" fill={THEME_COLORS.secondary} radius={[4, 4, 0, 0]} barSize={40} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
+              {/* Charts Row 2: Unit (Admin Only) & Target Audience */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                {currentUser.role === 'admin' && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                    <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                      <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                      <span className="border-b-2 border-blue-500/20 pb-1">Thống Kê Theo Đơn Vị</span>
+                    </h3>
+                    <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={statsByUnit} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
+                          <XAxis type="number" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: THEME_COLORS.subtext}} />
+                          <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: THEME_COLORS.subtext}} width={150} />
+                          <Tooltip 
+                            contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                          />
+                          <Bar dataKey="value" fill={THEME_COLORS.primaryLight} radius={[0, 4, 4, 0]} barSize={20} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                  <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                    <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                    <span className="border-b-2 border-blue-500/20 pb-1">Cơ Cấu Đối Tượng</span>
                   </h3>
                   <div className="h-80 flex items-center">
                     <ResponsiveContainer width="100%" height="100%">
@@ -1228,29 +1149,70 @@ function MainApp() {
                     </div>
                   </div>
                 </div>
-
-                {currentUser.role === 'admin' && (
-                  <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm lg:col-span-2">
-                    <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
-                      <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
-                      Phân Loại Theo Đơn Vị Gốc
-                    </h3>
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={statsByUnit}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
-                          <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
-                          <Tooltip 
-                            contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
-                          />
-                          <Bar dataKey="value" fill="#4F46E5" radius={[4, 4, 0, 0]} barSize={60} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                )}
               </div>
+
+              {/* Summary Table */}
+              <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                  <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                  <span className="border-b-2 border-blue-500/20 pb-1">Bảng Tổng Hợp Phân Loại</span>
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Hình thức truyền thông</th>
+                        <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Số buổi</th>
+                        <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Số người tham gia</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {Object.entries(reportSummary.byType).map(([type, val]) => (
+                        <tr key={type} className="hover:bg-blue-50/80 even:bg-slate-50/50 transition-all duration-200">
+                          <td className="px-6 py-4 text-sm font-medium text-slate-700">{type}</td>
+                          <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
+                          <td className="px-6 py-4 text-sm font-bold text-blue-600 text-center">{val.people}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-50/50 font-bold">
+                        <td className="px-6 py-4 text-sm text-slate-900 uppercase">Tổng cộng</td>
+                        <td className="px-6 py-4 text-sm text-slate-900 text-center">{reportSummary.totalSessions}</td>
+                        <td className="px-6 py-4 text-sm text-blue-700 text-center">{reportSummary.totalPeople}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Unit Summary Table (Admin Only) */}
+              {currentUser.role === 'admin' && (
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                  <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2 group">
+                    <span className="w-1.5 h-6 bg-blue-600 rounded-full group-hover:h-8 transition-all duration-300"></span>
+                    <span className="border-b-2 border-blue-500/20 pb-1">Bảng Tổng Hợp Theo Đơn Vị</span>
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 border-b border-slate-200">
+                          <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Đơn vị</th>
+                          <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Số buổi</th>
+                          <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Số người tham gia</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {Object.entries(reportSummary.byUnit).map(([unit, val]) => (
+                          <tr key={unit} className="hover:bg-blue-50/80 even:bg-slate-50/50 transition-all duration-200">
+                            <td className="px-6 py-4 text-sm font-medium text-slate-700">{unit}</td>
+                            <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
+                            <td className="px-6 py-4 text-sm font-bold text-blue-600 text-center">{val.people}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1281,7 +1243,7 @@ function MainApp() {
                               console.error("Error in toggleReminder button:", error);
                             }
                           }}
-                          className={`p-2 rounded-lg transition-colors ${reminder.hoanThanh ? 'text-emerald-500 bg-emerald-50' : 'text-slate-300 hover:bg-slate-50 hover:text-indigo-600'}`}
+                          className={`p-2 rounded-lg transition-colors ${reminder.hoanThanh ? 'text-emerald-500 bg-emerald-50' : 'text-slate-300 hover:bg-slate-50 hover:text-blue-600'}`}
                         >
                           <CheckCircle2 size={18} />
                         </button>
@@ -1337,105 +1299,98 @@ function MainApp() {
       </main>
 
       {/* Print Only Section */}
-      <div id="print-area" className="p-8">
-        {filteredRecords.length > 0 ? (
+      <div id="print-area" className="p-8 hidden print:block">
+        {reportRecords.length > 0 ? (
           <>
-            <h1 className="text-2xl font-bold text-center mb-2 uppercase">BÁO CÁO TRUYỀN THÔNG GDSK</h1>
-            <p className="text-center mb-8 italic subtitle">Thời gian: {reportTitle}</p>
-            
-            <div className="mb-8 space-y-4">
-              <div className="section-title">I. TỔNG HỢP CHUNG</div>
-              <p>1. Tổng số buổi truyền thông: <strong>{reportSummary.totalSessions}</strong></p>
-              <p>2. Tổng số lượt người tham gia: <strong>{reportSummary.totalPeople}</strong></p>
-              
-              <div className="section-title">II. PHÂN LOẠI THEO HÌNH THỨC</div>
-              <table className="w-full border-collapse border border-black mb-6">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="border border-black p-2">Hình thức</th>
-                    <th className="border border-black p-2 text-center">Số buổi</th>
-                    <th className="border border-black p-2 text-center">Số người</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(reportSummary.byType).map(([type, val]) => (
-                    <tr key={type}>
-                      <td className="border border-black p-2">{type}</td>
-                      <td className="border border-black p-2 text-center">{val.sessions}</td>
-                      <td className="border border-black p-2 text-center">{val.people}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {currentUser.role === 'admin' && (
-                <>
-                  <div className="section-title">III. PHÂN LOẠI THEO ĐƠN VỊ</div>
-                  <table className="w-full border-collapse border border-black mb-6">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="border border-black p-2">Đơn vị</th>
-                        <th className="border border-black p-2 text-center">Số buổi</th>
-                        <th className="border border-black p-2 text-center">Số người</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(reportSummary.byUnit).map(([unit, val]) => (
-                        <tr key={unit}>
-                          <td className="border border-black p-2">{unit}</td>
-                          <td className="border border-black p-2 text-center">{val.sessions}</td>
-                          <td className="border border-black p-2 text-center">{val.people}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              )}
-              
-              <div className="section-title">{currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIẾT CÁC HOẠT ĐỘNG</div>
+            <div className="flex justify-between items-start mb-8">
+              <div className="text-center space-y-1">
+                <p className="font-bold uppercase text-[10pt]">SỞ Y TẾ .................................</p>
+                <p className="font-bold uppercase text-[10pt]">TTYT ...................................</p>
+                <p className="font-bold uppercase text-[10pt]">TRẠM Y TẾ: {UNITS.find(u => u.id === currentUser.unitId)?.name.toUpperCase() || '.......................'}</p>
+              </div>
+              <div className="text-center space-y-1">
+                <p className="font-bold uppercase text-[10pt]">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</p>
+                <p className="font-bold text-[10pt] border-b border-black pb-1 inline-block">Độc lập - Tự do - Hạnh phúc</p>
+                <p className="text-[9pt] mt-2 block">Mẫu số: A11/YTCS</p>
+              </div>
             </div>
 
-            <table className="w-full border-collapse border border-black text-[10pt]">
+            <h1 className="text-2xl font-black text-center mb-2 uppercase tracking-tight">SỔ GHI CHÉP HOẠT ĐỘNG TRUYỀN THÔNG GIÁO DỤC SỨC KHỎE</h1>
+            <p className="text-center mb-10 italic subtitle text-sm">Thời gian: {reportTitle}</p>
+            
+            <table className="w-full border-collapse border-2 border-black text-[9pt]">
               <thead>
-                <tr>
-                  <th className="border border-black p-2">STT</th>
-                  <th className="border border-black p-2">Thời gian</th>
-                  <th className="border border-black p-2">Địa điểm</th>
-                  <th className="border border-black p-2">Nội dung</th>
-                  <th className="border border-black p-2">Hình thức</th>
-                  <th className="border border-black p-2">Đơn vị</th>
-                  <th className="border border-black p-2">Đối tượng</th>
-                  <th className="border border-black p-2">Số người</th>
-                  <th className="border border-black p-2">Phương tiện</th>
-                  <th className="border border-black p-2">Thời lượng</th>
-                  <th className="border border-black p-2">Người thực hiện</th>
-                  <th className="border border-black p-2">Ký xác nhận</th>
-                  <th className="border border-black p-2">Ghi chú</th>
+                <tr className="bg-slate-50">
+                  <th className="border-2 border-black p-2 w-8">STT</th>
+                  <th className="border-2 border-black p-2 w-24">Ngày, tháng</th>
+                  <th className="border-2 border-black p-2 w-32">Địa điểm</th>
+                  <th className="border-2 border-black p-2">Nội dung truyền thông</th>
+                  <th className="border-2 border-black p-2 w-28">Hình thức truyền thông</th>
+                  <th className="border-2 border-black p-2 w-28">Đối tượng truyền thông</th>
+                  <th className="border-2 border-black p-2 w-16">Số người tham dự</th>
+                  <th className="border-2 border-black p-2 w-16">Thời lượng (phút)</th>
+                  <th className="border-2 border-black p-2 w-24">Phương tiện truyền thông</th>
+                  <th className="border-2 border-black p-2 w-24">Người thực hiện</th>
+                  <th className="border-2 border-black p-2 w-24">Ký xác nhận</th>
+                  <th className="border-2 border-black p-2 w-24">Ghi chú</th>
+                </tr>
+                <tr className="bg-slate-100 text-[8pt]">
+                  <td className="border-2 border-black p-1 text-center italic">1</td>
+                  <td className="border-2 border-black p-1 text-center italic">2</td>
+                  <td className="border-2 border-black p-1 text-center italic">3</td>
+                  <td className="border-2 border-black p-1 text-center italic">4</td>
+                  <td className="border-2 border-black p-1 text-center italic">5</td>
+                  <td className="border-2 border-black p-1 text-center italic">6</td>
+                  <td className="border-2 border-black p-1 text-center italic">7</td>
+                  <td className="border-2 border-black p-1 text-center italic">8</td>
+                  <td className="border-2 border-black p-1 text-center italic">9</td>
+                  <td className="border-2 border-black p-1 text-center italic">10</td>
+                  <td className="border-2 border-black p-1 text-center italic">11</td>
+                  <td className="border-2 border-black p-1 text-center italic">12</td>
                 </tr>
               </thead>
               <tbody>
-                {filteredRecords.map(r => (
+                {reportRecords.map(r => (
                   <tr key={r.id}>
-                    <td className="border border-black p-2 text-center">{r.stt}</td>
-                    <td className="border border-black p-2">{safeFormat(r.thoiGian, 'dd/MM/yyyy')}</td>
-                    <td className="border border-black p-2">{r.diaDiem}</td>
-                    <td className="border border-black p-2">{r.noiDung}</td>
-                    <td className="border border-black p-2">{r.hinhThuc}</td>
-                    <td className="border border-black p-2">{UNITS.find(u => u.id === r.unitId)?.name || 'N/A'}</td>
-                    <td className="border border-black p-2">{r.doiTuong}</td>
-                    <td className="border border-black p-2 text-center">{r.soNguoi}</td>
-                    <td className="border border-black p-2">{r.phuongTien}</td>
-                    <td className="border border-black p-2">{r.thoiLuong}</td>
-                    <td className="border border-black p-2">{r.staff}</td>
-                    <td className="border border-black p-2">{r.signature}</td>
-                    <td className="border border-black p-2">{r.ghiChu}</td>
+                    <td className="border-2 border-black p-2 text-center font-medium">{r.stt}</td>
+                    <td className="border-2 border-black p-2 text-center">{safeFormat(r.thoiGian, 'dd/MM/yyyy')}</td>
+                    <td className="border-2 border-black p-2">{r.diaDiem}</td>
+                    <td className="border-2 border-black p-2">{r.noiDung}</td>
+                    <td className="border-2 border-black p-2">{r.hinhThuc}</td>
+                    <td className="border-2 border-black p-2">{r.doiTuong}</td>
+                    <td className="border-2 border-black p-2 text-center">{r.soNguoi}</td>
+                    <td className="border-2 border-black p-2 text-center">{r.thoiLuong}</td>
+                    <td className="border-2 border-black p-2">{r.phuongTien}</td>
+                    <td className="border-2 border-black p-2">{r.staff}</td>
+                    <td className="border-2 border-black p-2">{r.signature}</td>
+                    <td className="border-2 border-black p-2">{r.ghiChu}</td>
                   </tr>
                 ))}
+                {/* Total Row */}
+                <tr className="font-bold bg-slate-50">
+                  <td colSpan={6} className="border-2 border-black p-2 text-right uppercase">Tổng cộng:</td>
+                  <td className="border-2 border-black p-2 text-center">{reportSummary.totalPeople}</td>
+                  <td colSpan={5} className="border-2 border-black p-2"></td>
+                </tr>
               </tbody>
             </table>
+
+            <div className="mt-12 grid grid-cols-2 text-center">
+              <div className="space-y-20">
+                <p className="font-bold uppercase">Trưởng trạm</p>
+                <div className="h-20"></div>
+                <p className="font-bold">...................................</p>
+              </div>
+              <div className="space-y-20">
+                <p className="font-bold italic">Ngày ...... tháng ...... năm 202...</p>
+                <p className="font-bold uppercase">Người lập sổ</p>
+                <div className="h-20"></div>
+                <p className="font-bold">{currentUser.name}</p>
+              </div>
+            </div>
           </>
         ) : (
-          <div className="text-center py-10 italic text-slate-500">
+          <div className="text-center py-20 italic text-slate-400 border-2 border-dashed border-slate-200 rounded-3xl">
             Không có hoạt động nào trong thời gian này
           </div>
         )}
@@ -1446,8 +1401,8 @@ function MainApp() {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-indigo-50/50">
-              <h3 className="text-xl font-bold text-slate-900">Thêm Hoạt Động Truyền Thông</h3>
-              <button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+              <h3 className="text-xl font-bold text-slate-900">{editingRecord ? 'Cập Nhật Hoạt Động' : 'Thêm Hoạt Động Truyền Thông'}</h3>
+              <button onClick={() => { setIsFormOpen(false); setEditingRecord(null); }} className="text-slate-400 hover:text-slate-600 transition-colors">
                 <Plus className="rotate-45" size={24} />
               </button>
             </div>
@@ -1571,7 +1526,7 @@ function MainApp() {
               <div className="flex gap-4 pt-4">
                 <button 
                   type="button"
-                  onClick={() => setIsFormOpen(false)}
+                  onClick={() => { setIsFormOpen(false); setEditingRecord(null); }}
                   className="flex-1 px-6 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
                 >
                   Hủy Bỏ
@@ -1581,7 +1536,7 @@ function MainApp() {
                   className="flex-1 px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-2"
                 >
                   <Save size={18} />
-                  Lưu Hoạt Động
+                  {editingRecord ? 'Cập Nhật' : 'Lưu Hoạt Động'}
                 </button>
               </div>
             </form>
@@ -1668,6 +1623,7 @@ function MainApp() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
