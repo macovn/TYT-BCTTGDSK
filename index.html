@@ -2,23 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-eval' 'unsafe-inline'; object-src 'none';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Google AI Studio App</title>
     <script>
       // Suppress Zerion wallet extension errors in iframe
       (function() {
+        try {
+          if (!window.hasOwnProperty('isZerion')) {
+            Object.defineProperty(window, 'isZerion', {
+              value: false,
+              writable: true,
+              configurable: true
+            });
+          }
+        } catch (e) {}
+
         const originalError = console.error;
         console.error = function(...args) {
-          if (args[0] && typeof args[0] === 'string' && args[0].includes('isZerion')) {
-            return;
-          }
-          if (args[0] instanceof Error && args[0].message.includes('isZerion')) {
+          if (args[0] && typeof args[0] === 'string' && (args[0].includes('isZerion') || args[0].includes('Cannot redefine property: isZerion'))) {
             return;
           }
           originalError.apply(console, args);
         };
+
         window.addEventListener('error', function(event) {
-          if (event.message && event.message.includes('isZerion')) {
+          if (event.message && (event.message.includes('isZerion') || event.message.includes('Cannot redefine property: isZerion'))) {
             event.preventDefault();
             event.stopPropagation();
           }

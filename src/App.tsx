@@ -17,7 +17,9 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  CalendarDays
+  CalendarDays,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -32,25 +34,88 @@ import {
   Cell
 } from 'recharts';
 import { format, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import html2pdf from 'html2pdf.js';
 import { 
   HealthCommunicationRecord, 
   Reminder,
   HINH_THUC_OPTIONS, 
   DOI_TUONG_OPTIONS, 
-  PHUONG_TIEN_OPTIONS 
+  PHUONG_TIEN_OPTIONS,
+  UNITS,
+  User
 } from './types';
-import { exportToExcel, exportToWord } from './lib/export';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
+const API_KEYS: Record<string, string> = {
+  "tram-chinh": "key-tram-chinh-123",
+  "doan-ket": "key-doan-ket-456",
+  "ha-long": "key-ha-long-789",
+  "dai-xuyen": "key-dai-xuyen-012",
+  "van-yen": "key-van-yen-345"
+};
+
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import LoginPage from './pages/LoginPage';
+
 export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/*" element={<MainApp />} />
+    </Routes>
+  );
+}
+
+function MainApp() {
+  const navigate = useNavigate();
+  
+  // Session Helper
+  const currentUser = useMemo(() => {
+    const u = localStorage.getItem("user");
+    return u ? JSON.parse(u) : null;
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) {
+      navigate('/login');
+    }
+  }, [currentUser, navigate]);
+
+  if (!currentUser) return null;
+
+  const logout = () => {
+    localStorage.removeItem("user");
+    navigate('/login');
+  };
+
+  console.log("MainApp: Rendering...");
   const [records, setRecords] = useState<HealthCommunicationRecord[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [activeTab, setActiveTab] = useState<'entry' | 'report' | 'reminders'>('entry');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isReminderFormOpen, setIsReminderFormOpen] = useState(false);
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // RBAC State - Now from currentUser
+  const [selectedUnit, setSelectedUnit] = useState<string>('all');
+
+  // Report Filter State
+  const [reportType, setReportType] = useState<'month' | 'quarter' | '6month' | '9month' | 'year'>('month');
+  const [reportValue, setReportValue] = useState<number>(new Date().getMonth() + 1);
+  const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
+
+  // Reset reportValue when reportType changes
+  useEffect(() => {
+    if (reportType === 'month') {
+      setReportValue(new Date().getMonth() + 1);
+    } else if (reportType === 'quarter') {
+      setReportValue(Math.ceil((new Date().getMonth() + 1) / 3));
+    } else if (reportType === '6month') {
+      setReportValue(new Date().getMonth() + 1 <= 6 ? 1 : 2);
+    } else {
+      setReportValue(1);
+    }
+  }, [reportType]);
 
   // Form state
   const [formData, setFormData] = useState<Partial<HealthCommunicationRecord>>({
@@ -62,69 +127,56 @@ export default function App() {
     soNguoi: 0,
     phuongTien: PHUONG_TIEN_OPTIONS[0],
     thoiLuong: '',
-    nguoiThucHien: '',
+    staff: '',
+    signature: '',
     ghiChu: '',
   });
 
-  // Load data from localStorage
+  // Fetch records from API
+  const fetchRecords = async () => {
+    try {
+      let url = `/api/data/${currentUser.unitId}`;
+      let headers: Record<string, string> = {
+        "x-api-key": API_KEYS[currentUser.unitId] || ""
+      };
+
+      if (currentUser.role === 'admin') {
+        url = `/api/central/report`;
+        headers = {}; 
+      }
+
+      const response = await fetch(url, { headers });
+      if (response.ok) {
+        const data = await response.json();
+        setRecords(data);
+      }
+    } catch (error) {
+      console.error("Error fetching records:", error);
+    }
+  };
+
   useEffect(() => {
-    const savedRecords = localStorage.getItem('health_comm_records');
-    const savedReminders = localStorage.getItem('health_comm_reminders');
+    fetchRecords();
     
-    if (savedRecords) setRecords(JSON.parse(savedRecords));
-    if (savedReminders) setReminders(JSON.parse(savedReminders));
-
-    if (!savedRecords) {
-      // Sample data
-      const sample: HealthCommunicationRecord[] = [
-        {
-          id: '1',
-          stt: 1,
-          thoiGian: '2026-03-10',
-          diaDiem: 'Hội trường UBND xã',
-          noiDung: 'Phòng chống sốt xuất huyết',
-          hinhThuc: 'Nói chuyện chuyên đề',
-          doiTuong: 'Toàn dân',
-          soNguoi: 45,
-          phuongTien: 'Slide trình chiếu',
-          thoiLuong: '60 phút',
-          nguoiThucHien: 'BS. Nguyễn Văn A',
-          ghiChu: '',
-        },
-        {
-          id: '2',
-          stt: 2,
-          thoiGian: '2026-03-15',
-          diaDiem: 'Trạm Y tế',
-          noiDung: 'Tiêm chủng mở rộng',
-          hinhThuc: 'Tư vấn trực tiếp',
-          doiTuong: 'Phụ nữ 15–49',
-          soNguoi: 12,
-          phuongTien: 'Tờ rơi',
-          thoiLuong: '15 phút',
-          nguoiThucHien: 'YS. Trần Thị B',
-          ghiChu: '',
-        }
-      ];
-      setRecords(sample);
-      localStorage.setItem('health_comm_records', JSON.stringify(sample));
+    // Load reminders from localStorage (still local for now)
+    const savedReminders = localStorage.getItem('health_comm_reminders');
+    if (savedReminders) {
+      const parsed = JSON.parse(savedReminders);
+      if (Array.isArray(parsed)) setReminders(parsed);
     }
 
-    if (!savedReminders) {
-      const sampleReminders: Reminder[] = [
-        {
-          id: 'r1',
-          tieuDe: 'Truyền thông phòng chống HIV',
-          ngay: format(new Date(), 'yyyy-MM-dd'),
-          loai: 'KeHoach',
-          moTa: 'Tổ chức tại trường THCS',
-          hoanThanh: false
-        }
-      ];
-      setReminders(sampleReminders);
-      localStorage.setItem('health_comm_reminders', JSON.stringify(sampleReminders));
+    // Auto-sync every 10 minutes for station users
+    let syncInterval: any;
+    if (currentUser.role === 'station') {
+      syncInterval = setInterval(() => {
+        handleSync();
+      }, 10 * 60 * 1000);
     }
-  }, []);
+
+    return () => {
+      if (syncInterval) clearInterval(syncInterval);
+    };
+  }, [currentUser]);
 
   // Save data to localStorage
   useEffect(() => {
@@ -137,33 +189,88 @@ export default function App() {
     localStorage.setItem('health_comm_reminders', JSON.stringify(reminders));
   }, [reminders]);
 
-  const handleAddRecord = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newRecord: HealthCommunicationRecord = {
-      ...(formData as HealthCommunicationRecord),
-      id: Date.now().toString(),
-      stt: records.length + 1,
-    };
-    setRecords([...records, newRecord]);
-    setIsFormOpen(false);
-    // Reset form
-    setFormData({
-      thoiGian: format(new Date(), 'yyyy-MM-dd'),
-      diaDiem: '',
-      noiDung: '',
-      hinhThuc: HINH_THUC_OPTIONS[0],
-      doiTuong: DOI_TUONG_OPTIONS[0],
-      soNguoi: 0,
-      phuongTien: PHUONG_TIEN_OPTIONS[0],
-      thoiLuong: '',
-      nguoiThucHien: '',
-      ghiChu: '',
-    });
+  const handleSync = async () => {
+    if (currentUser.role === 'admin') return;
+    
+    setIsSyncing(true);
+    try {
+      const response = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          unitId: currentUser.unitId,
+          apiKey: API_KEYS[currentUser.unitId],
+          data: records
+        })
+      });
+
+      if (response.ok) {
+        alert("Đồng bộ dữ liệu về trạm chính thành công!");
+      } else {
+        alert("Đồng bộ thất bại. Vui lòng kiểm tra kết nối.");
+      }
+    } catch (error) {
+      console.error("Sync error:", error);
+      alert("Lỗi khi đồng bộ dữ liệu.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleAddRecord = async (e: React.FormEvent) => {
+    try {
+      e.preventDefault();
+      
+      if (!formData.staff) {
+        alert("Vui lòng nhập người thực hiện");
+        return;
+      }
+
+      const record: HealthCommunicationRecord = {
+        ...(formData as HealthCommunicationRecord),
+        id: Math.random().toString(36).substr(2, 9),
+        stt: records.length + 1,
+        unitId: currentUser.unitId
+      };
+
+      const response = await fetch(`/api/data/${currentUser.unitId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": API_KEYS[currentUser.unitId] || ""
+        },
+        body: JSON.stringify(record)
+      });
+
+      if (response.ok) {
+        setRecords(prev => [record, ...prev]);
+        setIsFormOpen(false);
+        setFormData({
+          thoiGian: format(new Date(), 'yyyy-MM-dd'),
+          diaDiem: '',
+          noiDung: '',
+          hinhThuc: HINH_THUC_OPTIONS[0],
+          doiTuong: DOI_TUONG_OPTIONS[0],
+          soNguoi: 0,
+          phuongTien: PHUONG_TIEN_OPTIONS[0],
+          thoiLuong: '',
+          staff: '',
+          signature: '',
+          ghiChu: '',
+        });
+      }
+    } catch (error) {
+      console.error("Error in handleAddRecord:", error);
+    }
   };
 
   const deleteRecord = (id: string) => {
-    const updated = records.filter(r => r.id !== id).map((r, index) => ({ ...r, stt: index + 1 }));
-    setRecords(updated);
+    try {
+      const updated = records.filter(r => r.id !== id).map((r, index) => ({ ...r, stt: index + 1 }));
+      setRecords(updated);
+    } catch (error) {
+      console.error("Error in deleteRecord:", error);
+    }
   };
 
   const [reminderFormData, setReminderFormData] = useState<Partial<Reminder>>({
@@ -174,28 +281,84 @@ export default function App() {
   });
 
   const handleAddReminder = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newReminder: Reminder = {
-      ...(reminderFormData as Reminder),
-      id: Date.now().toString(),
-      hoanThanh: false,
-    };
-    setReminders([...reminders, newReminder]);
-    setIsReminderFormOpen(false);
-    setReminderFormData({
-      tieuDe: '',
-      ngay: format(new Date(), 'yyyy-MM-dd'),
-      loai: 'KeHoach',
-      moTa: '',
-    });
+    try {
+      e.preventDefault();
+      const newReminder: Reminder = {
+        ...(reminderFormData as Reminder),
+        id: Date.now().toString(),
+        hoanThanh: false,
+      };
+      setReminders([...reminders, newReminder]);
+      setIsReminderFormOpen(false);
+      setReminderFormData({
+        tieuDe: '',
+        ngay: format(new Date(), 'yyyy-MM-dd'),
+        loai: 'KeHoach',
+        moTa: '',
+      });
+    } catch (error) {
+      console.error("Error in handleAddReminder:", error);
+    }
   };
 
   // Report calculations
   const filteredRecords = useMemo(() => {
-    const start = startOfMonth(currentMonth);
-    const end = endOfMonth(currentMonth);
-    return records.filter(r => isWithinInterval(new Date(r.thoiGian), { start, end }));
-  }, [records, currentMonth]);
+    try {
+      return records.filter(record => {
+        // RBAC Filter
+        if (currentUser.role === 'admin') {
+          if (selectedUnit !== 'all' && record.unitId !== selectedUnit) return false;
+        } else {
+          if (record.unitId !== currentUser.unitId) return false;
+        }
+
+        const date = new Date(record.thoiGian);
+        if (isNaN(date.getTime())) return false;
+        
+        const month = date.getMonth() + 1;
+        const year = date.getFullYear();
+
+        if (year !== reportYear) return false;
+
+        switch (reportType) {
+          case 'month':
+            return month === reportValue;
+          case 'quarter':
+            const q = Math.ceil(month / 3);
+            return q === reportValue;
+          case '6month':
+            return reportValue === 1 ? month <= 6 : month > 6;
+          case '9month':
+            return month <= 9;
+          case 'year':
+            return true;
+          default:
+            return true;
+        }
+      });
+    } catch (e) {
+      console.error("Lỗi khi tính toán dữ liệu báo cáo:", e);
+      return [];
+    }
+  }, [records, reportType, reportValue, reportYear, currentUser, selectedUnit]);
+
+  const reportTitle = useMemo(() => {
+    const yearStr = `Năm ${reportYear}`;
+    switch (reportType) {
+      case 'month':
+        return `Tháng ${reportValue} / ${yearStr}`;
+      case 'quarter':
+        return `Quý ${reportValue === 1 ? 'I' : reportValue === 2 ? 'II' : reportValue === 3 ? 'III' : 'IV'} / ${yearStr}`;
+      case '6month':
+        return `${reportValue === 1 ? '6 tháng đầu năm' : '6 tháng cuối năm'} / ${yearStr}`;
+      case '9month':
+        return `9 tháng đầu năm / ${yearStr}`;
+      case 'year':
+        return yearStr;
+      default:
+        return yearStr;
+    }
+  }, [reportType, reportValue, reportYear]);
 
   const statsByHinhThuc = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -203,6 +366,32 @@ export default function App() {
       counts[r.hinhThuc] = (counts[r.hinhThuc] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [filteredRecords]);
+
+  const reportSummary = useMemo(() => {
+    const totalSessions = filteredRecords.length;
+    const totalPeople = filteredRecords.reduce((sum, item) => sum + Number(item.soNguoi || 0), 0);
+    
+    const byType: Record<string, { sessions: number; people: number }> = {};
+    const byUnit: Record<string, { sessions: number; people: number }> = {};
+    
+    filteredRecords.forEach(item => {
+      const type = item.hinhThuc || "Khác";
+      if (!byType[type]) {
+        byType[type] = { sessions: 0, people: 0 };
+      }
+      byType[type].sessions += 1;
+      byType[type].people += Number(item.soNguoi || 0);
+
+      const unit = UNITS.find(u => u.id === item.unitId)?.name || "Không xác định";
+      if (!byUnit[unit]) {
+        byUnit[unit] = { sessions: 0, people: 0 };
+      }
+      byUnit[unit].sessions += 1;
+      byUnit[unit].people += Number(item.soNguoi || 0);
+    });
+    
+    return { totalSessions, totalPeople, byType, byUnit };
   }, [filteredRecords]);
 
   const statsByDoiTuong = useMemo(() => {
@@ -213,27 +402,348 @@ export default function App() {
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [filteredRecords]);
 
+  const statsByUnit = useMemo(() => {
+    const counts: Record<string, number> = {};
+    filteredRecords.forEach(r => {
+      const unitName = UNITS.find(u => u.id === r.unitId)?.name || "Khác";
+      counts[unitName] = (counts[unitName] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [filteredRecords]);
+
   const handlePrint = () => {
-    window.print();
+    try {
+      if (typeof window === "undefined") return;
+      const content = document.getElementById('print-area');
+
+      if (!content) {
+        alert("Không có dữ liệu để in");
+        return;
+      }
+
+      const printWindow = window.open("", "", "width=1200,height=800");
+      if (!printWindow) {
+        alert("Vui lòng cho phép trình duyệt mở cửa sổ mới để in");
+        return;
+      }
+
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>In sổ GDSK</title>
+            <style>
+              @page {
+                size: A4 landscape;
+                margin: 2cm 2cm 2cm 3cm;
+              }
+              body {
+                font-family: "Times New Roman", Times, serif;
+                font-size: 14pt;
+                line-height: 1.3;
+                margin: 0;
+                padding: 0;
+              }
+              .header {
+                text-align: center;
+                margin-bottom: 30px;
+              }
+              .header h1 {
+                font-size: 18pt;
+                margin: 0;
+                text-transform: uppercase;
+              }
+              .header h2 {
+                font-size: 14pt;
+                margin: 5px 0;
+              }
+              .header p {
+                font-style: italic;
+                margin: 5px 0;
+              }
+              .section-title { 
+                font-size: 14pt; 
+                font-weight: bold; 
+                margin-top: 20px; 
+                margin-bottom: 10px; 
+              }
+              table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 20px;
+              }
+              th, td {
+                border: 1px solid black;
+                padding: 6px;
+                text-align: left;
+                font-size: 12pt;
+              }
+              th {
+                background-color: #f2f2f2;
+                text-align: center;
+                font-weight: bold;
+              }
+              .footer {
+                margin-top: 40px;
+                display: flex;
+                justify-content: space-between;
+              }
+              .footer-col {
+                text-align: center;
+                width: 40%;
+              }
+              .footer-col p.title {
+                font-weight: bold;
+                margin-bottom: 60px;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>Sổ theo dõi truyền thông GDSK</h1>
+              <h2>Trạm Y tế Cái Bầu</h2>
+              <p>Thời gian: ${reportTitle}</p>
+            </div>
+
+            <div class="section-title">I. TỔNG HỢP CHUNG</div>
+            <p>1. Tổng số buổi truyền thông: ${reportSummary.totalSessions}</p>
+            <p>2. Tổng số lượt người tham gia: ${reportSummary.totalPeople}</p>
+
+            <div class="section-title">II. PHÂN LOẠI THEO HÌNH THỨC</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Hình thức</th>
+                  <th>Số buổi</th>
+                  <th>Số người</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(reportSummary.byType).map(([type, val]) => `
+                  <tr>
+                    <td>${type}</td>
+                    <td style="text-align: center">${val.sessions}</td>
+                    <td style="text-align: center">${val.people}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            ${currentUser.role === 'admin' ? `
+              <div class="section-title">III. PHÂN LOẠI THEO ĐƠN VỊ</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Đơn vị</th>
+                    <th>Số buổi</th>
+                    <th>Số người</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${Object.entries(reportSummary.byUnit).map(([unit, val]) => `
+                    <tr>
+                      <td>${unit}</td>
+                      <td style="text-align: center">${val.sessions}</td>
+                      <td style="text-align: center">${val.people}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            ` : ''}
+
+            <div class="section-title">${currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIẾT CÁC HOẠT ĐỘNG</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>STT</th>
+                  <th>Thời gian</th>
+                  <th>Địa điểm</th>
+                  <th>Nội dung</th>
+                  <th>Hình thức</th>
+                  <th>Đơn vị</th>
+                  <th>Đối tượng</th>
+                  <th>Số người</th>
+                  <th>Phương tiện</th>
+                  <th>Thời lượng</th>
+                  <th>Người thực hiện</th>
+                  <th>Ký xác nhận</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${filteredRecords.map(row => `
+                  <tr>
+                    <td style="text-align: center">${row.stt}</td>
+                    <td>${safeFormat(row.thoiGian, 'dd/MM/yyyy')}</td>
+                    <td>${row.diaDiem}</td>
+                    <td>${row.noiDung}</td>
+                    <td>${row.hinhThuc}</td>
+                    <td>${UNITS.find(u => u.id === row.unitId)?.name || 'N/A'}</td>
+                    <td>${row.doiTuong}</td>
+                    <td style="text-align: center">${row.soNguoi}</td>
+                    <td>${row.phuongTien}</td>
+                    <td>${row.thoiLuong}</td>
+                    <td>${row.staff}</td>
+                    <td>${row.signature || ''}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            <div class="footer">
+              <div class="footer-col">
+                <p class="title">Người lập</p>
+                <p style="font-style: italic">(Ký, ghi rõ họ tên)</p>
+              </div>
+              <div class="footer-col">
+                <p class="title">Trưởng trạm</p>
+                <p style="font-style: italic">(Ký tên, đóng dấu)</p>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+      printWindow.document.close();
+      printWindow.focus();
+
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 500);
+    } catch (error) {
+      console.error("Error in handlePrint:", error);
+    }
   };
 
-  const handleExportPDF = () => {
-    const element = document.getElementById('print-area');
-    if (!element) return;
-
-    const opt: any = {
-      margin: [20, 20, 20, 30], // top, right, bottom, left (mm)
-      filename: 'So_GDSK_A11.pdf',
-      image: { type: 'jpeg', quality: 1 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: {
-        unit: 'mm',
-        format: 'a4',
-        orientation: 'landscape'
+  const handleExportPDF = async () => {
+    try {
+      if (typeof window === "undefined") return;
+      if (filteredRecords.length === 0) {
+        alert("Không có hoạt động trong thời gian này");
+        return;
       }
-    };
 
-    html2pdf().set(opt).from(element).save();
+      // Lazy load libraries
+      const [jsPDFModule, autoTableModule] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable')
+      ]);
+      const { jsPDF } = jsPDFModule;
+      
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // Add title
+      doc.setFontSize(18);
+      doc.text("BAO CAO TRUYEN THONG GDSK", doc.internal.pageSize.getWidth() / 2, 20, { align: "center" });
+      
+      doc.setFontSize(12);
+      doc.text(`Thoi gian: ${reportTitle}`, doc.internal.pageSize.getWidth() / 2, 28, { align: "center" });
+
+      // I. Summary Section
+      doc.setFontSize(14);
+      doc.text("I. TONG HOP CHUNG", 14, 40);
+      doc.setFontSize(11);
+      doc.text(`1. Tong so buoi truyen thong: ${reportSummary.totalSessions}`, 14, 48);
+      doc.text(`2. Tong so luot nguoi tham gia: ${reportSummary.totalPeople}`, 14, 54);
+
+      // II. Classification Table
+      doc.setFontSize(14);
+      doc.text("II. PHAN LOAI THEO HINH THUC", 14, 65);
+      
+      const summaryColumn = ["Hinh thuc", "So buoi", "So nguoi"];
+      const summaryRows = Object.entries(reportSummary.byType).map(([type, val]) => [
+        type, val.sessions, val.people
+      ]);
+
+      (doc as any).autoTable({
+        head: [summaryColumn],
+        body: summaryRows,
+        startY: 70,
+        theme: 'grid',
+        styles: { fontSize: 10, font: 'helvetica' },
+        headStyles: { fillColor: [100, 100, 100] }
+      });
+
+      let finalY = (doc as any).lastAutoTable.finalY || 70;
+
+      // Unit Breakdown (Admin Only)
+      if (currentUser.role === 'admin') {
+        doc.setFontSize(14);
+        doc.text("III. PHAN LOAI THEO DON VI", 14, finalY + 15);
+        
+        const unitColumn = ["Don vi", "So buoi", "So nguoi"];
+        const unitRows = Object.entries(reportSummary.byUnit).map(([unit, val]) => [
+          unit, val.sessions, val.people
+        ]);
+
+        (doc as any).autoTable({
+          head: [unitColumn],
+          body: unitRows,
+          startY: finalY + 20,
+          theme: 'grid',
+          styles: { fontSize: 10, font: 'helvetica' },
+          headStyles: { fillColor: [100, 100, 100] }
+        });
+        finalY = (doc as any).lastAutoTable.finalY || finalY + 20;
+      }
+
+      // III. Detailed Table
+      doc.setFontSize(14);
+      doc.text(`${currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIET CAC HOAT DONG`, 14, finalY + 15);
+
+      const tableColumn = ["STT", "Thoi gian", "Dia diem", "Noi dung", "Hinh thuc", "Don vi", "Doi tuong", "So nguoi", "Phuong tien", "Thoi luong", "Nguoi thuc hien", "Ky xac nhan", "Ghi chu"];
+      const tableRows = filteredRecords.map(row => [
+        row.stt,
+        safeFormat(row.thoiGian, 'dd/MM/yyyy'),
+        row.diaDiem,
+        row.noiDung,
+        row.hinhThuc,
+        UNITS.find(u => u.id === row.unitId)?.name || 'N/A',
+        row.doiTuong,
+        row.soNguoi,
+        row.phuongTien,
+        row.thoiLuong,
+        row.staff,
+        row.signature || "",
+        row.ghiChu || ""
+      ]);
+
+      (doc as any).autoTable({
+        head: [tableColumn],
+        body: tableRows,
+        startY: finalY + 20,
+        theme: 'grid',
+        styles: {
+          fontSize: 9,
+          cellPadding: 2,
+          valign: 'middle',
+          font: 'helvetica'
+        },
+        headStyles: {
+          fillColor: [240, 240, 240],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+        }
+      });
+
+      doc.save(`Bao_cao_truyen_thong_${reportTitle.replace(/\//g, '-')}.pdf`);
+    } catch (error) {
+      console.error("Error in handleExportPDF:", error);
+      alert("Có lỗi xảy ra khi xuất PDF. Vui lòng thử lại.");
+    }
+  };
+
+  const safeFormat = (dateStr: string, formatStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return 'N/A';
+      return format(date, formatStr);
+    } catch (e) {
+      return 'N/A';
+    }
   };
 
   return (
@@ -245,7 +755,27 @@ export default function App() {
             <Megaphone size={24} strokeWidth={2.5} />
             <h1 className="font-bold text-lg tracking-tight">GDSK A11</h1>
           </div>
-          <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">Trạm Y tế Xã/Phường</p>
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">
+            {UNITS.find(u => u.id === currentUser.unitId)?.name || 'Trạm Y tế'}
+          </p>
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold text-xs">
+                {currentUser.username?.[0]?.toUpperCase() || 'U'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-700 truncate">{currentUser.username}</p>
+                <p className="text-[10px] text-slate-400 uppercase font-bold">{currentUser.role === 'admin' ? 'Quản trị viên' : 'Nhân viên trạm'}</p>
+              </div>
+            </div>
+            <button 
+              onClick={logout}
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            >
+              <LogIn size={14} className="rotate-180" />
+              Đăng xuất
+            </button>
+          </div>
         </div>
 
         <nav className="flex-1 p-4 space-y-1">
@@ -285,7 +815,14 @@ export default function App() {
             <p className="text-2xl font-bold">{records.length}</p>
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button 
-                onClick={() => exportToExcel(records)}
+                onClick={async () => {
+                  try {
+                    const { exportToExcel } = await import('./lib/export');
+                    exportToExcel(filteredRecords, reportTitle, currentUser.role === 'admin');
+                  } catch (error) {
+                    console.error("Error in exportToExcel button:", error);
+                  }
+                }}
                 className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
                 title="Xuất Excel"
               >
@@ -293,7 +830,14 @@ export default function App() {
                 Excel
               </button>
               <button 
-                onClick={() => exportToWord(records)}
+                onClick={async () => {
+                  try {
+                    const { exportToWord } = await import('./lib/export');
+                    exportToWord(filteredRecords, reportTitle, currentUser.role === 'admin');
+                  } catch (error) {
+                    console.error("Error in exportToWord button:", error);
+                  }
+                }}
                 className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
                 title="Xuất Word"
               >
@@ -301,7 +845,14 @@ export default function App() {
                 Word
               </button>
               <button 
-                onClick={handleExportPDF}
+                onClick={async () => {
+                  try {
+                    const { exportToPDF } = await import('./lib/export');
+                    exportToPDF(filteredRecords, reportTitle, currentUser.role === 'admin');
+                  } catch (error) {
+                    console.error("Error in exportToPDF button:", error);
+                  }
+                }}
                 className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
                 title="Xuất PDF"
               >
@@ -330,35 +881,102 @@ export default function App() {
               {activeTab === 'entry' ? 'Danh Sách Hoạt Động Truyền Thông' : 
                activeTab === 'report' ? 'Thống Kê Báo Cáo' : 'Danh Sách Nhắc Nhở'}
             </h2>
+
+            {/* Unit Selector */}
+            <div className="flex items-center gap-2 bg-slate-100 rounded-xl p-1.5">
+              <span className="text-[10px] font-bold text-slate-400 uppercase px-2">Đơn vị:</span>
+              {currentUser.role === 'admin' ? (
+                <select 
+                  value={selectedUnit}
+                  onChange={(e) => setSelectedUnit(e.target.value)}
+                  className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                >
+                  <option value="all">Tất cả đơn vị</option>
+                  {UNITS.map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <select 
+                  disabled
+                  value={currentUser.unitId}
+                  className="bg-slate-200 border-none text-xs font-bold px-3 py-1.5 rounded-lg outline-none cursor-not-allowed opacity-70"
+                >
+                  <option value={currentUser.unitId}>
+                    {UNITS.find(u => u.id === currentUser.unitId)?.name}
+                  </option>
+                </select>
+              )}
+            </div>
+
             {activeTab === 'report' && (
-              <div className="flex items-center bg-slate-100 rounded-lg p-1">
-                <button 
-                  onClick={() => setCurrentMonth(new Date(currentMonth.setMonth(currentMonth.getMonth() - 1)))}
-                  className="p-1 hover:bg-white rounded transition-all"
+              <div className="flex items-center gap-2 bg-slate-100 rounded-xl p-1.5">
+                <select 
+                  value={reportType}
+                  onChange={(e) => setReportType(e.target.value as any)}
+                  className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
                 >
-                  <ChevronLeft size={16} />
-                </button>
-                <span className="px-3 text-sm font-semibold min-w-[100px] text-center">
-                  Tháng {format(currentMonth, 'MM/yyyy')}
-                </span>
-                <button 
-                  onClick={() => setCurrentMonth(new Date(currentMonth.setMonth(currentMonth.getMonth() + 1)))}
-                  className="p-1 hover:bg-white rounded transition-all"
+                  <option value="month">Tháng</option>
+                  <option value="quarter">Quý</option>
+                  <option value="6month">6 tháng</option>
+                  <option value="9month">9 tháng</option>
+                  <option value="year">Năm</option>
+                </select>
+
+                {(reportType === 'month' || reportType === 'quarter' || reportType === '6month') && (
+                  <select 
+                    value={reportValue}
+                    onChange={(e) => setReportValue(parseInt(e.target.value))}
+                    className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                  >
+                    {reportType === 'month' && Array.from({ length: 12 }, (_, i) => (
+                      <option key={i + 1} value={i + 1}>Tháng {i + 1}</option>
+                    ))}
+                    {reportType === 'quarter' && [1, 2, 3, 4].map(q => (
+                      <option key={q} value={q}>Quý {q === 1 ? 'I' : q === 2 ? 'II' : q === 3 ? 'III' : 'IV'}</option>
+                    ))}
+                    {reportType === '6month' && (
+                      <>
+                        <option value={1}>6 tháng đầu</option>
+                        <option value={2}>6 tháng cuối</option>
+                      </>
+                    )}
+                  </select>
+                )}
+
+                <select 
+                  value={reportYear}
+                  onChange={(e) => setReportYear(parseInt(e.target.value))}
+                  className="bg-white border-none text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
                 >
-                  <ChevronRight size={16} />
-                </button>
+                  {[2024, 2025, 2026, 2027].map(y => (
+                    <option key={y} value={y}>Năm {y}</option>
+                  ))}
+                </select>
               </div>
             )}
           </div>
 
           {activeTab === 'entry' && (
-            <button 
-              onClick={() => setIsFormOpen(true)}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-indigo-100"
-            >
-              <Plus size={18} />
-              Thêm Hoạt Động
-            </button>
+            <div className="flex gap-2">
+              {currentUser.role === 'station' && (
+                <button
+                  onClick={handleSync}
+                  disabled={isSyncing}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-emerald-100 disabled:opacity-50"
+                >
+                  <Save size={18} className={isSyncing ? 'animate-spin' : ''} />
+                  {isSyncing ? 'Đang đồng bộ...' : 'Đồng bộ về trạm chính'}
+                </button>
+              )}
+              <button 
+                onClick={() => setIsFormOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold transition-all shadow-md shadow-indigo-100"
+              >
+                <Plus size={18} />
+                Thêm Hoạt Động
+              </button>
+            </div>
           )}
 
           {activeTab === 'reminders' && (
@@ -385,6 +1003,7 @@ export default function App() {
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Địa điểm</th>
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Nội dung</th>
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hình thức</th>
+                      <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đơn vị</th>
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đối tượng</th>
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người</th>
                       <th className="px-4 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Phương tiện</th>
@@ -395,13 +1014,16 @@ export default function App() {
                     {records.map((record) => (
                       <tr key={record.id} className="hover:bg-slate-50/50 transition-colors group">
                         <td className="px-4 py-4 text-sm font-medium text-slate-400 text-center">{record.stt}</td>
-                        <td className="px-4 py-4 text-sm font-semibold text-slate-700">{format(new Date(record.thoiGian), 'dd/MM/yyyy')}</td>
+                        <td className="px-4 py-4 text-sm font-semibold text-slate-700">{safeFormat(record.thoiGian, 'dd/MM/yyyy')}</td>
                         <td className="px-4 py-4 text-sm text-slate-600">{record.diaDiem}</td>
                         <td className="px-4 py-4 text-sm font-medium text-slate-900">{record.noiDung}</td>
                         <td className="px-4 py-4">
                           <span className="px-2 py-1 bg-indigo-50 text-indigo-600 text-[11px] font-bold rounded-md uppercase tracking-wide">
                             {record.hinhThuc}
                           </span>
+                        </td>
+                        <td className="px-4 py-4 text-xs font-medium text-slate-500">
+                          {UNITS.find(u => u.id === record.unitId)?.name || 'N/A'}
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-600">{record.doiTuong}</td>
                         <td className="px-4 py-4 text-sm font-bold text-slate-900 text-center">{record.soNguoi}</td>
@@ -431,8 +1053,26 @@ export default function App() {
 
           {activeTab === 'report' && (
             <div className="space-y-8">
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Report Header */}
+              <div className="text-center space-y-2 mb-10">
+                <h2 className="text-3xl font-black text-slate-900 tracking-tight uppercase">BÁO CÁO TRUYỀN THÔNG GDSK</h2>
+                <p className="text-slate-500 font-medium text-lg">Thời gian: {reportTitle}</p>
+              </div>
+
+              {filteredRecords.length === 0 ? (
+                <div className="bg-white py-20 rounded-3xl border border-dashed border-slate-200 text-center space-y-4">
+                  <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto text-slate-300">
+                    <AlertCircle size={40} />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xl font-bold text-slate-900">Không có hoạt động nào</p>
+                    <p className="text-slate-400">Vui lòng chọn thời gian khác hoặc thêm dữ liệu mới.</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Stats Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
@@ -443,7 +1083,7 @@ export default function App() {
                       <p className="text-2xl font-black text-slate-900">{filteredRecords.length}</p>
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500">Trong tháng {format(currentMonth, 'MM/yyyy')}</p>
+                  <p className="text-xs text-slate-500">{reportTitle}</p>
                 </div>
 
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
@@ -454,7 +1094,7 @@ export default function App() {
                     <div>
                       <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Tổng số người</p>
                       <p className="text-2xl font-black text-slate-900">
-                        {filteredRecords.reduce((sum, r) => sum + r.soNguoi, 0)}
+                        {reportSummary.totalPeople}
                       </p>
                     </div>
                   </div>
@@ -469,13 +1109,76 @@ export default function App() {
                     <div>
                       <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Hình thức phổ biến</p>
                       <p className="text-lg font-bold text-slate-900 truncate">
-                        {statsByHinhThuc.length > 0 ? statsByHinhThuc.sort((a,b) => b.value - a.value)[0].name : 'N/A'}
+                        {statsByHinhThuc.length > 0 ? [...statsByHinhThuc].sort((a,b) => b.value - a.value)[0].name : 'N/A'}
                       </p>
                     </div>
                   </div>
                   <p className="text-xs text-slate-500">Được thực hiện nhiều nhất</p>
                 </div>
               </div>
+
+              {/* Summary Table */}
+              <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
+                  <span className="w-1 h-6 bg-slate-600 rounded-full"></span>
+                  Bảng Tổng Hợp Phân Loại
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hình thức truyền thông</th>
+                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số buổi</th>
+                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người tham gia</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {Object.entries(reportSummary.byType).map(([type, val]) => (
+                        <tr key={type} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4 text-sm font-medium text-slate-700">{type}</td>
+                          <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
+                          <td className="px-6 py-4 text-sm font-bold text-indigo-600 text-center">{val.people}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-50/50 font-bold">
+                        <td className="px-6 py-4 text-sm text-slate-900 uppercase">Tổng cộng</td>
+                        <td className="px-6 py-4 text-sm text-slate-900 text-center">{reportSummary.totalSessions}</td>
+                        <td className="px-6 py-4 text-sm text-indigo-700 text-center">{reportSummary.totalPeople}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Unit Summary Table (Admin Only) */}
+              {currentUser.role === 'admin' && (
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                  <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
+                    <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
+                    Bảng Tổng Hợp Theo Đơn Vị
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Đơn vị</th>
+                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số buổi</th>
+                          <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-center">Số người tham gia</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {Object.entries(reportSummary.byUnit).map(([unit, val]) => (
+                          <tr key={unit} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-6 py-4 text-sm font-medium text-slate-700">{unit}</td>
+                            <td className="px-6 py-4 text-sm font-bold text-slate-900 text-center">{val.sessions}</td>
+                            <td className="px-6 py-4 text-sm font-bold text-indigo-600 text-center">{val.people}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -533,15 +1236,39 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {currentUser.role === 'admin' && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm lg:col-span-2">
+                    <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2">
+                      <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
+                      Phân Loại Theo Đơn Vị Gốc
+                    </h3>
+                    <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={statsByUnit}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                          <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                          <Tooltip 
+                            contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                          />
+                          <Bar dataKey="value" fill="#4F46E5" radius={[4, 4, 0, 0]} barSize={60} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
+            </>
           )}
+        </div>
+      )}
 
           {activeTab === 'reminders' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {reminders.sort((a, b) => new Date(a.ngay).getTime() - new Date(b.ngay).getTime()).map((reminder) => {
+              {[...reminders].sort((a, b) => new Date(a.ngay).getTime() - new Date(b.ngay).getTime()).map((reminder) => {
                 const isOverdue = new Date(reminder.ngay) < new Date() && !reminder.hoanThanh;
-                const isToday = format(new Date(reminder.ngay), 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
+                const isToday = safeFormat(reminder.ngay, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
                 
                 return (
                   <div 
@@ -555,8 +1282,12 @@ export default function App() {
                       <div className="flex gap-2">
                         <button 
                           onClick={() => {
-                            const updated = reminders.map(r => r.id === reminder.id ? { ...r, hoanThanh: !r.hoanThanh } : r);
-                            setReminders(updated);
+                            try {
+                              const updated = reminders.map(r => r.id === reminder.id ? { ...r, hoanThanh: !r.hoanThanh } : r);
+                              setReminders(updated);
+                            } catch (error) {
+                              console.error("Error in toggleReminder button:", error);
+                            }
                           }}
                           className={`p-2 rounded-lg transition-colors ${reminder.hoanThanh ? 'text-emerald-500 bg-emerald-50' : 'text-slate-300 hover:bg-slate-50 hover:text-indigo-600'}`}
                         >
@@ -564,8 +1295,12 @@ export default function App() {
                         </button>
                         <button 
                           onClick={() => {
-                            const updated = reminders.filter(r => r.id !== reminder.id);
-                            setReminders(updated);
+                            try {
+                              const updated = reminders.filter(r => r.id !== reminder.id);
+                              setReminders(updated);
+                            } catch (error) {
+                              console.error("Error in deleteReminder button:", error);
+                            }
                           }}
                           className="p-2 text-slate-300 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors"
                         >
@@ -583,7 +1318,7 @@ export default function App() {
                       <div className="flex items-center gap-2 text-xs font-semibold">
                         <CalendarIcon size={14} className="text-slate-400" />
                         <span className={isOverdue ? 'text-red-500' : isToday ? 'text-amber-500' : 'text-slate-600'}>
-                          {format(new Date(reminder.ngay), 'dd/MM/yyyy')}
+                          {safeFormat(reminder.ngay, 'dd/MM/yyyy')}
                         </span>
                       </div>
                       {isOverdue && !reminder.hoanThanh && (
@@ -611,43 +1346,107 @@ export default function App() {
 
       {/* Print Only Section */}
       <div id="print-area" className="p-8">
-        <h1 className="text-2xl font-bold text-center mb-2">SỔ THEO DÕI TRUYỀN THÔNG GDSK</h1>
-        <p className="text-center mb-8 italic">Mẫu A11/TYT - Theo Thông tư 23/2019/TT-BYT</p>
-        
-        <table className="w-full border-collapse border border-black text-[10pt]">
-          <thead>
-            <tr>
-              <th className="border border-black p-2">STT</th>
-              <th className="border border-black p-2">Thời gian</th>
-              <th className="border border-black p-2">Địa điểm</th>
-              <th className="border border-black p-2">Nội dung</th>
-              <th className="border border-black p-2">Hình thức</th>
-              <th className="border border-black p-2">Đối tượng</th>
-              <th className="border border-black p-2">Số người</th>
-              <th className="border border-black p-2">Phương tiện</th>
-              <th className="border border-black p-2">Thời lượng</th>
-              <th className="border border-black p-2">Người thực hiện</th>
-              <th className="border border-black p-2">Ghi chú</th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.map(r => (
-              <tr key={r.id}>
-                <td className="border border-black p-2 text-center">{r.stt}</td>
-                <td className="border border-black p-2">{format(new Date(r.thoiGian), 'dd/MM/yyyy')}</td>
-                <td className="border border-black p-2">{r.diaDiem}</td>
-                <td className="border border-black p-2">{r.noiDung}</td>
-                <td className="border border-black p-2">{r.hinhThuc}</td>
-                <td className="border border-black p-2">{r.doiTuong}</td>
-                <td className="border border-black p-2 text-center">{r.soNguoi}</td>
-                <td className="border border-black p-2">{r.phuongTien}</td>
-                <td className="border border-black p-2">{r.thoiLuong}</td>
-                <td className="border border-black p-2">{r.nguoiThucHien}</td>
-                <td className="border border-black p-2">{r.ghiChu}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {filteredRecords.length > 0 ? (
+          <>
+            <h1 className="text-2xl font-bold text-center mb-2 uppercase">BÁO CÁO TRUYỀN THÔNG GDSK</h1>
+            <p className="text-center mb-8 italic subtitle">Thời gian: {reportTitle}</p>
+            
+            <div className="mb-8 space-y-4">
+              <div className="section-title">I. TỔNG HỢP CHUNG</div>
+              <p>1. Tổng số buổi truyền thông: <strong>{reportSummary.totalSessions}</strong></p>
+              <p>2. Tổng số lượt người tham gia: <strong>{reportSummary.totalPeople}</strong></p>
+              
+              <div className="section-title">II. PHÂN LOẠI THEO HÌNH THỨC</div>
+              <table className="w-full border-collapse border border-black mb-6">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border border-black p-2">Hình thức</th>
+                    <th className="border border-black p-2 text-center">Số buổi</th>
+                    <th className="border border-black p-2 text-center">Số người</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(reportSummary.byType).map(([type, val]) => (
+                    <tr key={type}>
+                      <td className="border border-black p-2">{type}</td>
+                      <td className="border border-black p-2 text-center">{val.sessions}</td>
+                      <td className="border border-black p-2 text-center">{val.people}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {currentUser.role === 'admin' && (
+                <>
+                  <div className="section-title">III. PHÂN LOẠI THEO ĐƠN VỊ</div>
+                  <table className="w-full border-collapse border border-black mb-6">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="border border-black p-2">Đơn vị</th>
+                        <th className="border border-black p-2 text-center">Số buổi</th>
+                        <th className="border border-black p-2 text-center">Số người</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(reportSummary.byUnit).map(([unit, val]) => (
+                        <tr key={unit}>
+                          <td className="border border-black p-2">{unit}</td>
+                          <td className="border border-black p-2 text-center">{val.sessions}</td>
+                          <td className="border border-black p-2 text-center">{val.people}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+              
+              <div className="section-title">{currentUser.role === 'admin' ? 'IV' : 'III'}. CHI TIẾT CÁC HOẠT ĐỘNG</div>
+            </div>
+
+            <table className="w-full border-collapse border border-black text-[10pt]">
+              <thead>
+                <tr>
+                  <th className="border border-black p-2">STT</th>
+                  <th className="border border-black p-2">Thời gian</th>
+                  <th className="border border-black p-2">Địa điểm</th>
+                  <th className="border border-black p-2">Nội dung</th>
+                  <th className="border border-black p-2">Hình thức</th>
+                  <th className="border border-black p-2">Đơn vị</th>
+                  <th className="border border-black p-2">Đối tượng</th>
+                  <th className="border border-black p-2">Số người</th>
+                  <th className="border border-black p-2">Phương tiện</th>
+                  <th className="border border-black p-2">Thời lượng</th>
+                  <th className="border border-black p-2">Người thực hiện</th>
+                  <th className="border border-black p-2">Ký xác nhận</th>
+                  <th className="border border-black p-2">Ghi chú</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRecords.map(r => (
+                  <tr key={r.id}>
+                    <td className="border border-black p-2 text-center">{r.stt}</td>
+                    <td className="border border-black p-2">{safeFormat(r.thoiGian, 'dd/MM/yyyy')}</td>
+                    <td className="border border-black p-2">{r.diaDiem}</td>
+                    <td className="border border-black p-2">{r.noiDung}</td>
+                    <td className="border border-black p-2">{r.hinhThuc}</td>
+                    <td className="border border-black p-2">{UNITS.find(u => u.id === r.unitId)?.name || 'N/A'}</td>
+                    <td className="border border-black p-2">{r.doiTuong}</td>
+                    <td className="border border-black p-2 text-center">{r.soNguoi}</td>
+                    <td className="border border-black p-2">{r.phuongTien}</td>
+                    <td className="border border-black p-2">{r.thoiLuong}</td>
+                    <td className="border border-black p-2">{r.staff}</td>
+                    <td className="border border-black p-2">{r.signature}</td>
+                    <td className="border border-black p-2">{r.ghiChu}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <div className="text-center py-10 italic text-slate-500">
+            Không có hoạt động nào trong thời gian này
+          </div>
+        )}
       </div>
 
       {/* Modal Form */}
@@ -751,6 +1550,29 @@ export default function App() {
                   >
                     {PHUONG_TIEN_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                   </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Người/Đơn vị thực hiện</label>
+                  <input 
+                    type="text" 
+                    placeholder="VD: BS. Nguyễn Văn A"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                    value={formData.staff}
+                    onChange={e => setFormData({...formData, staff: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ký xác nhận</label>
+                  <input 
+                    type="text" 
+                    placeholder="Người ký / đã ký"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                    value={formData.signature}
+                    onChange={e => setFormData({...formData, signature: e.target.value})}
+                  />
                 </div>
               </div>
 

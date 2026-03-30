@@ -14,9 +14,29 @@ export interface HealthCommunicationRecord {
   soNguoi: number;
   phuongTien: string;
   thoiLuong: string;
-  nguoiThucHien: string;
+  staff: string;
+  signature: string;
   ghiChu: string;
+  unitId: string;
+  sourceUnit?: string;
+  syncedAt?: string;
 }
+
+export interface User {
+  id: string;
+  name: string;
+  username?: string;
+  role: 'admin' | 'station';
+  unitId: string;
+}
+
+export const UNITS = [
+  { id: "tram-chinh", name: "Trạm chính" },
+  { id: "doan-ket", name: "Điểm trạm 1 (Đoàn Kết)" },
+  { id: "ha-long", name: "Điểm trạm 2 (Hạ Long)" },
+  { id: "dai-xuyen", name: "Điểm trạm 3 (Đài Xuyên)" },
+  { id: "van-yen", name: "Điểm trạm 4 (Vạn Yên)" }
+];
 
 export interface Reminder {
   id: string;

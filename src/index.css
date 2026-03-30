@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @layer base {
-  /* Styles for the print-only area, used by both window.print() and html2pdf.js */
+  /* Styles for the print-only area, used by window.print() */
   #print-area {
     position: fixed;
     left: -9999px;
