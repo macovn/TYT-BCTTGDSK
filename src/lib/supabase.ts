@@ -7,4 +7,5 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('Supabase URL or Anon Key is missing. Please check your environment variables.');
 }
 
+console.log("USING SUPABASE");
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
